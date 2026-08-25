@@ -1,0 +1,4 @@
+psutil
+WMI
+customtkinter
+pyinstaller
