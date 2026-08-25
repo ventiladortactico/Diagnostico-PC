@@ -18,7 +18,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.0"
+VERSION = "3.1"
 
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35
@@ -499,15 +499,36 @@ def escanear(progreso=None):
     }
 
 
-clave_inicio = lambda p: (p["Nombre"].lower(), p["Comando"].lower())
+def nombre_norm(s):
+    s = (s or "").strip().lower()
+    if s.endswith(".lnk"):
+        s = s[:-4].strip()
+    return s
+
+
+def comando_norm(s):
+    return " ".join((s or "").lower().replace('"', "").split())
 
 
 def comparar_inicio(a, d):
-    set_a = {clave_inicio(p) for p in a}
-    set_d = {clave_inicio(p) for p in d}
-    eliminados = [p for p in a if clave_inicio(p) not in set_d]
-    agregados = [p for p in d if clave_inicio(p) not in set_a]
-    return eliminados, agregados
+    grupos_a, grupos_d = {}, {}
+    for p in a:
+        grupos_a.setdefault(nombre_norm(p.get("Nombre")), []).append(p)
+    for p in d:
+        grupos_d.setdefault(nombre_norm(p.get("Nombre")), []).append(p)
+    eliminados, agregados, modificados = [], [], []
+    for n in sorted(set(grupos_a) | set(grupos_d)):
+        la = grupos_a.get(n, [])
+        ld = grupos_d.get(n, [])
+        m = min(len(la), len(ld))
+        for i in range(m):
+            if comando_norm(la[i].get("Comando")) != comando_norm(ld[i].get("Comando")):
+                modificados.append((la[i], ld[i]))
+        if len(la) > m:
+            eliminados.extend(la[m:])
+        if len(ld) > m:
+            agregados.extend(ld[m:])
+    return eliminados, agregados, modificados
 
 
 clave_disco = lambda d: (d.get("Modelo", "").lower(), d.get("Tamano_GB"))
@@ -1036,7 +1057,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
             resultados.append(r["estado"])
             filas_metricas += r["tr"]
 
-    eliminados, agregados = comparar_inicio(a["Inicio"], b["Inicio"])
+    eliminados, agregados, modificados = comparar_inicio(a["Inicio"], b["Inicio"])
 
     mapa_b = {clave_disco(d): d for d in b["Discos_Fisicos"]}
     filas_discos = ""
@@ -1083,7 +1104,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
             if letra.upper().startswith("C:"):
                 gb_libre_delta = dif
 
-    total_cambios = len(resultados) + len(eliminados) + len(agregados) + len(filas_discos) + len(filas_part) + len(resueltos) + len(nuevos)
+    total_cambios = len(resultados) + len(eliminados) + len(agregados) + len(modificados) + len(filas_discos) + len(filas_part) + len(resueltos) + len(nuevos)
 
     sa = score_gravedad(hallazgos_a)
     sb = score_gravedad(hallazgos_b)
@@ -1105,6 +1126,8 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
         bullets.append(("ok", f"{len(eliminados)} aplicaciones de inicio eliminadas"))
     if agregados:
         bullets.append(("problema", f"{len(agregados)} aplicaciones de inicio agregadas"))
+    if modificados:
+        bullets.append(("info", f"{len(modificados)} aplicaciones de inicio cambiaron su ruta"))
     if gb_libre_delta is not None and abs(gb_libre_delta) >= 0.5:
         if gb_libre_delta > 0:
             bullets.append(("ok", f"{fmt(gb_libre_delta)} GB de almacenamiento liberados en el disco principal"))
@@ -1173,7 +1196,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
                       "<table><thead><tr><th>Metrica</th><th>Antes</th><th>Despues</th><th>Cambio</th><th>Interpretacion</th></tr></thead>"
                       f"<tbody>{filas_metricas}</tbody></table></div>")
 
-    if eliminados or agregados:
+    if eliminados or agregados or modificados:
 
         def tabla_lista(lista):
             if not lista:
@@ -1185,9 +1208,20 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
             return ("<table><thead><tr><th style='width:26%'>Programa</th><th>Comando</th><th style='width:28%'>Origen</th></tr></thead>"
                     f"<tbody>{filas}</tbody></table>")
 
+        def tabla_modificados(lista):
+            if not lista:
+                return "<p class='sin-cambios'>Sin cambios.</p>"
+            filas = "".join(
+                f"<tr><td>{esc(pa['Nombre'])}</td><td>{esc(pa['Comando'])}</td><td>{esc(pd['Comando'])}</td></tr>"
+                for pa, pd in lista
+            )
+            return ("<table><thead><tr><th style='width:26%'>Programa</th><th>Comando antes</th><th>Comando ahora</th></tr></thead>"
+                    f"<tbody>{filas}</tbody></table>")
+
         secciones += ("<div class='seccion'><h2>Cambios en programas de inicio</h2>"
                       f"<p class='sub-bloque' style='color:#15803d'>Eliminados del inicio ({len(eliminados)})</p>{tabla_lista(eliminados)}"
-                      f"<p class='sub-bloque' style='color:#991b1b'>Agregados al inicio ({len(agregados)})</p>{tabla_lista(agregados)}</div>")
+                      f"<p class='sub-bloque' style='color:#991b1b'>Agregados al inicio ({len(agregados)})</p>{tabla_lista(agregados)}"
+                      f"<p class='sub-bloque' style='color:#92400e'>Cambiaron de ruta ({len(modificados)})</p>{tabla_modificados(modificados)}</div>")
 
     if filas_discos:
         secciones += ("<div class='seccion'><h2>Cambios en almacenamiento y SMART</h2>"
