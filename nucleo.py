@@ -18,7 +18,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.1"
+VERSION = "3.2"
 
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35

@@ -1,6 +1,7 @@
 import os
 import threading
 import traceback
+import webbrowser
 
 import customtkinter as ctk
 from tkinter import messagebox
@@ -71,6 +72,63 @@ class DialogoServicio(ctk.CTkToplevel):
         self.grab_release()
         self.destroy()
         self.al_crear(sid)
+
+
+class DialogoDonacion(ctk.CTkToplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Apoyar al creador")
+        self.geometry("540x300")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+
+        ctk.CTkLabel(self, text="APOYAR AL CREADOR", font=("Segoe UI", 18, "bold"), text_color=ACENTO).pack(pady=(24, 2))
+        ctk.CTkLabel(
+            self,
+            text="Si esta herramienta te resulta util, podes colaborar\ncon un aporte voluntario para seguir mejorandola.",
+            font=("Segoe UI", 12),
+            text_color=GRIS,
+            justify="center",
+        ).pack()
+
+        cont = ctk.CTkFrame(self, fg_color="transparent")
+        cont.pack(fill="both", expand=True, padx=36, pady=14)
+
+        ctk.CTkLabel(cont, text="Enlace de Mercado Pago", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
+        ctk.CTkLabel(cont, text="Se crea desde la app de Mercado Pago: Cobrar > Link de pago", font=("Segoe UI", 11), text_color=GRIS, anchor="w").pack(fill="x", pady=(0, 4))
+        self.ent_url = ctk.CTkEntry(cont, height=34, placeholder_text="https://mpago.la/XXXXXXXX")
+        cfg = nucleo.leer_config()
+        if cfg.get("url_donacion"):
+            self.ent_url.insert(0, cfg["url_donacion"])
+        self.ent_url.pack(fill="x")
+        self.ent_url.focus()
+
+        self.lbl_error = ctk.CTkLabel(cont, text="", font=("Segoe UI", 12), text_color=ROJO)
+        self.lbl_error.pack(pady=(8, 0))
+
+        ctk.CTkButton(
+            self,
+            text="Guardar enlace y abrir donacion",
+            height=40,
+            font=("Segoe UI", 14, "bold"),
+            fg_color="#009EE3",
+            hover_color="#007FBF",
+            command=self._guardar,
+        ).pack(fill="x", padx=36, pady=(0, 10))
+        self.bind("<Return>", lambda e: self._guardar())
+
+    def _guardar(self):
+        url = self.ent_url.get().strip()
+        if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
+            self.lbl_error.configure(text="El enlace debe empezar con http:// o https://")
+            return
+        cfg = nucleo.leer_config()
+        cfg["url_donacion"] = url
+        nucleo.escribir_config(cfg)
+        self.grab_release()
+        self.destroy()
+        webbrowser.open(url)
 
 
 class SelectorLista(ctk.CTkToplevel):
@@ -175,6 +233,10 @@ class App(ctk.CTk):
         ctk.CTkButton(franja, text="Abrir Descargas", width=130, height=30, command=self.abrir_descargas).pack(
             side="right", padx=(12, 0)
         )
+
+        ctk.CTkButton(
+            franja, text="Donar", width=80, height=30, fg_color="#009EE3", hover_color="#007FBF", command=self._donar
+        ).pack(side="right", padx=(8, 0))
 
         self.lbl_aviso = ctk.CTkLabel(self, text="", font=("Segoe UI", 13, "bold"), text_color=AMBAR, justify="left", anchor="w")
         self.lbl_aviso.pack(fill="x", padx=28)
@@ -709,6 +771,14 @@ class App(ctk.CTk):
 
     def _estado(self, texto, color_txt=GRIS):
         self._ui(lambda: self.lbl_estado.configure(text=texto, text_color=color_txt))
+
+    def _donar(self):
+        cfg = nucleo.leer_config()
+        url = (cfg.get("url_donacion") or "").strip()
+        if url.lower().startswith("http://") or url.lower().startswith("https://"):
+            webbrowser.open(url)
+        else:
+            DialogoDonacion(self)
 
     def abrir_descargas(self):
         try:
