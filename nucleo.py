@@ -4,8 +4,10 @@ import sys
 import json
 import glob
 import html
+import hmac
 import shutil
 import socket
+import hashlib
 import tempfile
 import subprocess
 import unicodedata
@@ -18,7 +20,9 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.3"
+VERSION = "3.4"
+
+TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35
@@ -55,10 +59,66 @@ def ruta_config():
 def leer_config():
     try:
         with open(ruta_config(), "r", encoding="utf-8") as fh:
-            cfg = json.load(fh)
-        return cfg if isinstance(cfg, dict) else {}
+            return json.load(fh)
     except Exception:
         return {}
+
+
+def _norm_tecnico(nombre):
+    return "".join((nombre or "").upper().split())
+
+
+def _clave_tecnico_esperada(nombre):
+    d = hmac.new(TECNICO_SECRETO.encode(), _norm_tecnico(nombre).encode(), hashlib.sha256).hexdigest().upper()
+    return d[:12]
+
+
+def generar_clave_tecnico(nombre):
+    k = _clave_tecnico_esperada(nombre)
+    return f"{k[:4]}-{k[4:8]}-{k[8:12]}"
+
+
+def clave_tecnico_valida(nombre, clave):
+    k = (clave or "").replace("-", "").replace(" ", "").upper()
+    return bool(_norm_tecnico(nombre)) and k == _clave_tecnico_esperada(nombre)
+
+
+def activar_tecnico(nombre, clave):
+    if not _norm_tecnico(nombre):
+        raise ValueError("El nombre del tecnico es obligatorio.")
+    if not clave_tecnico_valida(nombre, clave):
+        raise ValueError("Clave de licencia invalida para ese nombre.")
+    cfg = leer_config()
+    cfg["tecnico_nombre"] = (nombre or "").strip()
+    cfg["tecnico_clave"] = (clave or "").strip().upper()
+    escribir_config(cfg)
+
+
+def desactivar_tecnico():
+    cfg = leer_config()
+    for k in ("tecnico_nombre", "tecnico_clave", "tecnico_logo", "tecnico_whatsapp"):
+        cfg.pop(k, None)
+    escribir_config(cfg)
+
+
+def guardar_tecnico(logo="", whatsapp=""):
+    cfg = leer_config()
+    cfg["tecnico_logo"] = (logo or "").strip()
+    cfg["tecnico_whatsapp"] = (whatsapp or "").strip()
+    escribir_config(cfg)
+
+
+def tecnico_licenciado():
+    cfg = leer_config()
+    nombre = (cfg.get("tecnico_nombre") or "").strip()
+    clave = (cfg.get("tecnico_clave") or "").strip()
+    if not nombre or not clave or not clave_tecnico_valida(nombre, clave):
+        return None
+    return {
+        "nombre": nombre,
+        "logo": (cfg.get("tecnico_logo") or "").strip(),
+        "whatsapp": (cfg.get("tecnico_whatsapp") or "").strip(),
+    }
 
 
 def escribir_config(cfg):
@@ -768,9 +828,11 @@ tbody tr:nth-child(even) td { background: #f7f9fc; }
 .firma { margin-top: 44px; display: flex; justify-content: space-between; font-size: 13px; page-break-inside: avoid; }
 .firma div { width: 44%; border-top: 1px solid #333; padding-top: 6px; text-align: center; color: #444; }
 .pie { margin-top: 26px; font-size: 11px; color: #98a2b3; text-align: center; }
+.marca { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 3px 18px; font-size: 10px; color: #475569; background: #f1f5f9; border-top: 1px solid #e2e8f0; z-index: 5; }
+.marca img { height: 20px; }
 @media print {
   body { background: #fff; padding: 0; }
-  .hoja { box-shadow: none; border-radius: 0; max-width: none; padding: 8mm 10mm; }
+  .hoja { box-shadow: none; border-radius: 0; max-width: none; padding: 8mm 10mm 14mm; }
   .no-print { display: none !important; }
   th, .pill, tbody tr:nth-child(even) td, .hero, .dot { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .salto-pagina { page-break-before: always; }
@@ -807,7 +869,22 @@ def _cabecera(titulo, subtitulo, equipo, lineas_meta, chips_html="", tecnico=Non
 """
 
 
+def _marca_tecnico_html():
+    lic = tecnico_licenciado()
+    if not lic:
+        return ""
+    nombre = esc(lic.get("nombre") or "")
+    wa = esc(lic.get("whatsapp") or "")
+    img = ""
+    logo = lic.get("logo") or ""
+    if logo and os.path.exists(logo):
+        img = f"<img src='file:///{logo.replace(chr(92), '/')}' alt='logo'>"
+    texto = f"<b>{nombre}</b>" + (f" &middot; WhatsApp {wa}" if wa else "")
+    return f"<div class='marca'>{img}<span>{texto}</span></div>"
+
+
 def _pagina(titulo, contenido):
+    marca = _marca_tecnico_html()
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -816,6 +893,7 @@ def _pagina(titulo, contenido):
 <style>{CSS}</style>
 </head>
 <body>
+{marca}
 <div class="hoja">
 {contenido}
 </div>

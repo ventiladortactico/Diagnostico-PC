@@ -1,7 +1,7 @@
 import os
 import threading
 import traceback
-import webbrowser
+from tkinter import filedialog
 
 import customtkinter as ctk
 from tkinter import messagebox
@@ -74,61 +74,133 @@ class DialogoServicio(ctk.CTkToplevel):
         self.al_crear(sid)
 
 
-class DialogoDonacion(ctk.CTkToplevel):
+class DialogoModoTecnico(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
-        self.title("Apoyar al creador")
-        self.geometry("540x300")
+        self.title("Modo tecnico")
+        self.geometry("520x360")
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()
 
-        ctk.CTkLabel(self, text="APOYAR AL CREADOR", font=("Segoe UI", 18, "bold"), text_color=ACENTO).pack(pady=(24, 2))
+        ctk.CTkLabel(self, text="MODO TECNICO", font=("Segoe UI", 18, "bold"), text_color=ACENTO).pack(pady=(22, 2))
         ctk.CTkLabel(
             self,
-            text="Si esta herramienta te resulta util, podes colaborar\ncon un aporte voluntario para seguir mejorandola.",
+            text="El tecnico certificado genera sus PDFs con su logo y WhatsApp.\nLa clave de licencia la entrega el creador de OptiChek.",
             font=("Segoe UI", 12),
             text_color=GRIS,
             justify="center",
         ).pack()
 
-        cont = ctk.CTkFrame(self, fg_color="transparent")
-        cont.pack(fill="both", expand=True, padx=36, pady=14)
+        self.cuerpo = ctk.CTkFrame(self, fg_color="transparent")
+        self.cuerpo.pack(fill="both", expand=True, padx=36)
+        self._vista_licencia()
 
-        ctk.CTkLabel(cont, text="Enlace de Mercado Pago", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
-        ctk.CTkLabel(cont, text="Se crea desde la app de Mercado Pago: Cobrar > Link de pago", font=("Segoe UI", 11), text_color=GRIS, anchor="w").pack(fill="x", pady=(0, 4))
-        self.ent_url = ctk.CTkEntry(cont, height=34, placeholder_text="https://mpago.la/XXXXXXXX")
-        cfg = nucleo.leer_config()
-        if cfg.get("url_donacion"):
-            self.ent_url.insert(0, cfg["url_donacion"])
-        self.ent_url.pack(fill="x")
-        self.ent_url.focus()
+    def _renovar(self):
+        for w in self.cuerpo.winfo_children():
+            w.destroy()
+        self._vista_licencia()
 
-        self.lbl_error = ctk.CTkLabel(cont, text="", font=("Segoe UI", 12), text_color=ROJO)
-        self.lbl_error.pack(pady=(8, 0))
+    def _vista_licencia(self):
+        lic = nucleo.tecnico_licenciado()
+        self.lic = lic
+        if lic:
+            self._logo = lic["logo"]
+            self.lbl_titulo_lic = ctk.CTkLabel(
+                self.cuerpo,
+                text=f"Licencia activa para {lic['nombre']}",
+                font=("Segoe UI", 14, "bold"),
+                text_color=VERDE,
+                anchor="w",
+            )
+            self.lbl_titulo_lic.pack(fill="x", pady=(6, 2))
 
-        ctk.CTkButton(
-            self,
-            text="Guardar enlace y abrir donacion",
-            height=40,
-            font=("Segoe UI", 14, "bold"),
-            fg_color="#009EE3",
-            hover_color="#007FBF",
-            command=self._guardar,
-        ).pack(fill="x", padx=36, pady=(0, 10))
-        self.bind("<Return>", lambda e: self._guardar())
+            ctk.CTkLabel(self.cuerpo, text="Logo (PNG o JPG)", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
+            fila = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
+            fila.pack(fill="x")
+            self.lbl_logo = ctk.CTkLabel(
+                fila,
+                text=os.path.basename(lic["logo"]) if lic["logo"] else "Sin logo",
+                font=("Segoe UI", 11),
+                text_color=GRIS,
+            )
+            self.lbl_logo.pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(fila, text="Elegir...", width=90, height=28, command=self._elegir_logo).pack(side="right")
+
+            ctk.CTkLabel(self.cuerpo, text="WhatsApp (ej: 11 5555 4444)", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
+            self.ent_wa = ctk.CTkEntry(self.cuerpo, height=32)
+            self.ent_wa.insert(0, lic["whatsapp"])
+            self.ent_wa.pack(fill="x")
+
+            self.lbl_error = ctk.CTkLabel(self.cuerpo, text="", font=("Segoe UI", 12), text_color=ROJO)
+            self.lbl_error.pack(pady=(6, 0))
+
+            botones = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
+            botones.pack(fill="x", pady=(12, 8))
+            ctk.CTkButton(botones, text="Guardar", height=34, fg_color=VERDE, hover_color="#16a34a", command=self._guardar).pack(
+                side="left", expand=True, fill="x", padx=(0, 6)
+            )
+            ctk.CTkButton(botones, text="Quitar licencia", height=34, fg_color="transparent", text_color=ROJO, border_width=1, command=self._quitar).pack(
+                side="left", expand=True, fill="x", padx=(6, 0)
+            )
+        else:
+            ctk.CTkLabel(self.cuerpo, text="Nombre del tecnico", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(10, 2))
+            self.ent_nombre = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="Ej: Juan Perez")
+            self.ent_nombre.pack(fill="x")
+
+            ctk.CTkLabel(self.cuerpo, text="Clave de licencia", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(10, 2))
+            self.ent_clave = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="XXXX-XXXX-XXXX")
+            self.ent_clave.pack(fill="x")
+
+            self.lbl_error = ctk.CTkLabel(self.cuerpo, text="", font=("Segoe UI", 12), text_color=ROJO)
+            self.lbl_error.pack(pady=(8, 0))
+
+            ctk.CTkButton(
+                self.cuerpo,
+                text="Activar licencia",
+                height=38,
+                font=("Segoe UI", 14, "bold"),
+                command=self._activar,
+            ).pack(fill="x", pady=(10, 8))
+            self.bind("<Return>", lambda e: self._activar())
+
+    def _elegir_logo(self):
+        ruta = filedialog.askopenfilename(
+            title="Logo del tecnico",
+            filetypes=[("Imagen", "*.png *.jpg *.jpeg *.bmp"), ("Todos", "*.*")],
+        )
+        if ruta:
+            self._logo = ruta
+            self.lbl_logo.configure(text=os.path.basename(ruta))
+
+    def _activar(self):
+        nombre = self.ent_nombre.get().strip()
+        clave = self.ent_clave.get().strip()
+        try:
+            nucleo.activar_tecnico(nombre, clave)
+        except Exception as e:
+            self.lbl_error.configure(text=str(e))
+            return
+        self.lbl_error.configure(text="", text_color=VERDE)
+        self._renovar()
+        self.master._actualizar_titulo()
+        self.lbl_error.configure(text="Licencia activada. Tus PDFs llevan tu marca.")
+
+    def _quitar(self):
+        nucleo.desactivar_tecnico()
+        self.master._actualizar_titulo()
+        self._renovar()
 
     def _guardar(self):
-        url = self.ent_url.get().strip()
-        if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
-            self.lbl_error.configure(text="El enlace debe empezar con http:// o https://")
+        wa = self.ent_wa.get().strip()
+        logo = getattr(self, "_logo", "")
+        if not nucleo.tecnico_licenciado():
+            self.lbl_error.configure(text="La licencia ya no es valida.")
             return
-        cfg = nucleo.leer_config()
-        cfg["url_donacion"] = url
-        nucleo.escribir_config(cfg)
-        self.grab_release()
-        self.destroy()
-        webbrowser.open(url)
+        nucleo.guardar_tecnico(logo=logo or "", whatsapp=wa)
+        self.lbl_error.configure(text="", text_color=VERDE)
+        self.lbl_error.configure(text="Marca guardada. Los proximos PDFs la incluyen.")
+        self.master._actualizar_titulo()
 
 
 class SelectorLista(ctk.CTkToplevel):
@@ -207,6 +279,7 @@ class App(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.title(f"OptiChek v{nucleo.VERSION}")
+        self._actualizar_titulo()
         self.geometry("1080x760")
         self.minsize(980, 640)
 
@@ -220,6 +293,11 @@ class App(ctk.CTk):
 
         self._construir()
         self.after(200, self._iniciar_contexto)
+
+    def _actualizar_titulo(self):
+        lic = nucleo.tecnico_licenciado()
+        sufijo = f" · Tecnico: {lic['nombre']}" if lic else ""
+        self.title(f"OptiChek v{nucleo.VERSION}{sufijo}")
 
     def _construir(self):
         franja = ctk.CTkFrame(self, fg_color="transparent")
@@ -235,7 +313,7 @@ class App(ctk.CTk):
         )
 
         ctk.CTkButton(
-            franja, text="Donar", width=80, height=30, fg_color="#009EE3", hover_color="#007FBF", command=self._donar
+            franja, text="Modo tecnico", width=120, height=30, command=self._abrir_modo_tecnico
         ).pack(side="right", padx=(8, 0))
 
         self.lbl_aviso = ctk.CTkLabel(self, text="", font=("Segoe UI", 13, "bold"), text_color=AMBAR, justify="left", anchor="w")
@@ -772,13 +850,8 @@ class App(ctk.CTk):
     def _estado(self, texto, color_txt=GRIS):
         self._ui(lambda: self.lbl_estado.configure(text=texto, text_color=color_txt))
 
-    def _donar(self):
-        cfg = nucleo.leer_config()
-        url = (cfg.get("url_donacion") or "").strip()
-        if url.lower().startswith("http://") or url.lower().startswith("https://"):
-            webbrowser.open(url)
-        else:
-            DialogoDonacion(self)
+    def _abrir_modo_tecnico(self):
+        DialogoModoTecnico(self)
 
     def abrir_descargas(self):
         try:
