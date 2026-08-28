@@ -12,6 +12,14 @@ Herramienta portable para técnicos de reparación de PC: escanea el estado comp
 2. Descargar `OptiChek.exe`
 3. Ejecutarlo (no requiere instalación). Windows puede avisar que es de origen desconocido: elegir *Más información → Ejecutar de todos modos*
 
+## Licencia de técnico
+
+La versión gratuita genera todos los informes. Si sos **técnico de reparación**, activá el **modo técnico** (botón *Modo técnico*) y tus PDFs pasan a llevar tu **logo y tu WhatsApp** en cada página, con el nombre del técnico en la barra de título.
+
+- Licencia de técnico (un solo pago): **$29.990**
+- Pagás acá: [https://mpago.li/2w4jF47](https://mpago.li/2w4jF47)
+- Después de pagar, recibís la clave de licencia junto con instrucciones para activarla.
+
 ## Qué hace
 
 - **Escaneo completo**: CPU, RAM y swap, discos físicos con S.M.A.R.T., particiones y espacio libre, programas que arrancan con Windows, temperaturas (multi-fuente: LibreHardwareMonitor → ACPI), GPU, placa madre, batería (salud real según diseño vs capacidad actual) y tiempo de encendido.

@@ -20,7 +20,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.5"
+VERSION = "3.6"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -804,6 +804,7 @@ h1 { font-size: 21px; color: #14345c; letter-spacing: .3px; }
 .btn { background: #2b6cb0; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer; margin-top: 8px; }
 .btn:hover { background: #1e4e8c; }
 .btn-flotante { position: fixed; bottom: 22px; right: 26px; margin-top: 0; z-index: 99; font-size: 14px; padding: 10px 18px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); }
+.aviso-pdf { position: fixed; bottom: 4px; left: 10px; font-size: 9px; color: #98a2b3; z-index: 99; max-width: 55%; }
 .chips { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .hero { background: #f0f6ff; border: 1px solid #dbeafe; border-radius: 10px; padding: 18px 22px; margin-top: 18px; }
 .hero .etiqueta { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #66707d; font-weight: 700; }
@@ -905,6 +906,7 @@ def _pagina(titulo, contenido):
 {contenido}
 </div>
 <button class="btn no-print btn-flotante" onclick="window.print()">Guardar como PDF</button>
+<p class="no-print aviso-pdf">Al imprimir desde el navegador, desactiva &quot;Cabecera y pie de pagina&quot; para que no salga la direccion del archivo abajo.</p>
 </body>
 </html>
 """
@@ -1345,9 +1347,11 @@ def _pdf_desde_contenido(contenido_html, nombre_base):
     try:
         with open(ruta_html_tmp, "w", encoding="utf-8") as fh:
             fh.write(contenido_html)
-        navegador = _encontrar_navegador()
-        if navegador:
-            perfil = os.path.join(tmp_dir, "perfil")
+        for intento in range(3):
+            navegador = _encontrar_navegador()
+            if not navegador:
+                break
+            perfil = os.path.join(tmp_dir, f"perfil{intento}")
             cmd = [
                 navegador,
                 "--headless",
