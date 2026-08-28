@@ -206,7 +206,7 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        self.title(f"Diagnostico PC v{nucleo.VERSION}")
+        self.title(f"OptiChek v{nucleo.VERSION}")
         self.geometry("1080x760")
         self.minsize(980, 640)
 

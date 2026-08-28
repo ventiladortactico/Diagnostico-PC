@@ -1,4 +1,4 @@
-# Diagnóstico PC
+# OptiChek
 
 Herramienta portable para técnicos de reparación de PC: escanea el estado completo de una computadora con Windows, genera un **informe PDF** listo para entregar al cliente y permite **comparar cualquier par de escaneos** para demostrar qué mejoró y qué empeoró después del mantenimiento.
 
@@ -9,7 +9,7 @@ Herramienta portable para técnicos de reparación de PC: escanea el estado comp
 ## Descargar
 
 1. Ir a la sección de [Releases](../../releases/latest)
-2. Descargar `diagnostico.exe`
+2. Descargar `OptiChek.exe`
 3. Ejecutarlo (no requiere instalación). Windows puede avisar que es de origen desconocido: elegir *Más información → Ejecutar de todos modos*
 
 ## Qué hace
@@ -29,7 +29,7 @@ Herramienta portable para técnicos de reparación de PC: escanea el estado comp
 
 ## Uso recomendado
 
-1. Copiá `diagnostico.exe` a un pendrive junto con una carpeta vacía llamada `servicios`
+1. Copiá `OptiChek.exe` a un pendrive junto con una carpeta vacía llamada `servicios`
 2. En casa del cliente: ejecutá el programa, creá el servicio con nombre del cliente y técnico
 3. Hacé el **escaneo inicial** (queda como #001) y entregale al cliente su PDF
 4. Realizá el mantenimiento
@@ -44,7 +44,7 @@ pip install -r requirements.txt
 compilar.bat
 ```
 
-El ejecutable queda en `dist\diagnostico.exe`. Requiere Python 3.12+.
+El ejecutable queda en `dist\OptiChek.exe`. Requiere Python 3.12+.
 
 ## Estructura
 

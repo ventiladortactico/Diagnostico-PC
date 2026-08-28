@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo  Compilando diagnostico.exe (version grafica)
+echo  Compilando OptiChek.exe (version grafica)
 echo ============================================
 echo.
 
@@ -21,7 +21,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/3] Compilando con PyInstaller...
-pyinstaller --onefile --windowed --uac-admin --clean --noconfirm --hidden-import win32timezone --collect-all customtkinter --name diagnostico diagnostico.py
+pyinstaller --onefile --windowed --uac-admin --clean --noconfirm --hidden-import win32timezone --collect-all customtkinter --name OptiChek diagnostico.py
 if errorlevel 1 (
     echo [ERROR] Fallo la compilacion.
     pause
@@ -35,6 +35,6 @@ if exist build rmdir /s /q build
 echo.
 echo ============================================
 echo  LISTO. El ejecutable esta en:
-echo  %cd%\dist\diagnostico.exe
+echo  %cd%\dist\OptiChek.exe
 echo ============================================
 pause

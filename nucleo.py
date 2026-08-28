@@ -18,7 +18,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.2"
+VERSION = "3.3"
 
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35
@@ -968,7 +968,7 @@ def generar_html_escaneo(datos, num, servicio=None):
            f"<tbody>{filas_part}</tbody></table></div>")
         + f"<div class='seccion'><h2>Programas al inicio ({len(datos['Inicio'])})</h2>{tabla_inicio}</div>"
         + "<div class='firma'><div>Firma del tecnico</div><div>Firma del cliente</div></div>"
-        + f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por Herramienta de Diagnostico PC v{VERSION} &mdash; Los porcentajes son valores instantaneos tomados al momento del escaneo.</p>"
+        + f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION} &mdash; Los porcentajes son valores instantaneos tomados al momento del escaneo.</p>"
     )
 
     titulo = f"Diagnostico #{num:03d} - {equipo}"
@@ -1176,7 +1176,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
             + "<div class='seccion vacio'><h2>Sin diferencias tecnicas</h2>"
             + "<p>Los dos escaneos son identicos en las metricas monitoreadas: rendimiento, programas de inicio,<br>"
             + "almacenamiento, estado SMART y diagnostico automatico no presentan cambios.</p></div>"
-            + f"<p class='pie'>Herramienta de Diagnostico PC v{VERSION}</p>"
+            + f"<p class='pie'>OptiChek v{VERSION}</p>"
         )
         return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", contenido)
 
@@ -1234,7 +1234,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
                       f"<tbody>{filas_part}</tbody></table></div>")
 
     secciones += "<div class='firma'><div>Firma del tecnico</div><div>Firma del cliente</div></div>"
-    secciones += f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por Herramienta de Diagnostico PC v{VERSION}.</p>"
+    secciones += f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION}.</p>"
 
     return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones)
 
