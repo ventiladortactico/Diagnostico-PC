@@ -11,10 +11,17 @@ import nucleo
 
 
 ACENTO = "#3b82f6"
-VERDE = "#22c55e"
+VERDE = "#10b981"
 ROJO = "#ef4444"
 AMBAR = "#f59e0b"
-GRIS = "#9ca3af"
+GRIS = "#94a3b8"
+FONDO = "#0b0f17"
+PANEL = "#111827"
+CARD = "#1e293b"
+BORDE = "#334155"
+TEXTO = "#f8fafc"
+TEXTO2 = "#94a3b8"
+TEXTO3 = "#64748b"
 
 
 class DialogoServicio(ctk.CTkToplevel):
@@ -26,6 +33,7 @@ class DialogoServicio(ctk.CTkToplevel):
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()
+        self.configure(fg_color=FONDO)
 
         cfg = nucleo.leer_config()
 
@@ -83,6 +91,7 @@ class DialogoModoTecnico(ctk.CTkToplevel):
         self.resizable(False, False)
         self.transient(master)
         self.grab_set()
+        self.configure(fg_color=FONDO)
 
         ctk.CTkLabel(self, text="MODO TECNICO", font=("Segoe UI", 18, "bold"), text_color=ACENTO).pack(pady=(22, 2))
         ctk.CTkLabel(
@@ -211,18 +220,18 @@ class SelectorLista(ctk.CTkToplevel):
         self.title(titulo)
         self.resizable(False, False)
         self.transient(master)
-        self.configure(fg_color=("gray92", "gray12"))
+        self.configure(fg_color=FONDO)
         x = master.winfo_rootx() + 140
         y = master.winfo_rooty() + 120
         self.geometry(f"+{x}+{y}")
 
-        ctk.CTkLabel(self, text=titulo, font=("Segoe UI", 15, "bold")).pack(padx=20, pady=(18, 10), anchor="w")
+        ctk.CTkLabel(self, text=titulo, font=("Segoe UI", 15, "bold"), text_color=TEXTO).pack(padx=20, pady=(18, 10), anchor="w")
 
         cuerpo = ctk.CTkFrame(self, fg_color="transparent")
         cuerpo.pack(fill="both", expand=True, padx=16)
 
         if not opciones:
-            ctk.CTkLabel(cuerpo, text=vacio, font=("Segoe UI", 13), text_color=("#666666", "#aaaaaa"), justify="left").pack(
+            ctk.CTkLabel(cuerpo, text=vacio, font=("Segoe UI", 13), text_color=TEXTO3, justify="left").pack(
                 anchor="w", padx=6, pady=(2, 8)
             )
         for texto, valor in opciones:
@@ -232,9 +241,11 @@ class SelectorLista(ctk.CTkToplevel):
                 text=("\u2713 " if es_activo else "") + texto,
                 anchor="w",
                 height=40,
+                corner_radius=10,
                 font=("Segoe UI", 13, "bold" if es_activo else "normal"),
-                fg_color="#2b6cb0" if es_activo else ("gray80", "gray25"),
-                hover_color="#1e4e8c" if es_activo else ("gray70", "gray35"),
+                fg_color="#1d4ed8" if es_activo else CARD,
+                hover_color="#2563eb" if es_activo else BORDE,
+                text_color="#ffffff" if es_activo else TEXTO,
                 command=lambda v=valor: self._elegir(v),
             )
             btn.pack(fill="x", pady=4)
@@ -244,16 +255,17 @@ class SelectorLista(ctk.CTkToplevel):
                 cuerpo,
                 text="+ Nuevo servicio",
                 height=36,
+                corner_radius=10,
                 fg_color="transparent",
                 border_width=1,
-                border_color=("gray60", "gray45"),
-                text_color=ACENTO,
+                border_color=BORDE,
+                text_color=TEXTO,
                 command=lambda: self._crear(crear_cmd),
             ).pack(fill="x", pady=(10, 4))
 
         ctk.CTkButton(
-            self, text="Cerrar", width=110, height=32, fg_color="transparent", border_width=1,
-            border_color=("gray60", "gray45"), command=self.destroy,
+            self, text="Cerrar", width=110, height=32, corner_radius=10, fg_color="transparent", border_width=1,
+            border_color=BORDE, text_color=TEXTO, command=self.destroy,
         ).pack(pady=(4, 16))
 
         self.lift()
@@ -287,6 +299,7 @@ class App(ctk.CTk):
             pass
         self.geometry("1080x760")
         self.minsize(980, 640)
+        self.configure(fg_color=FONDO)
 
         self.servicios = []
         self.servicio_activo = None
@@ -303,142 +316,236 @@ class App(ctk.CTk):
         lic = nucleo.tecnico_licenciado()
         sufijo = f" · Tecnico: {lic['nombre']}" if lic else ""
         self.title(f"OptiChek v{nucleo.VERSION}{sufijo}")
+        if getattr(self, "pie_lat", None) is None:
+            return
+        for w in self.pie_lat.winfo_children():
+            w.destroy()
+        if lic:
+            ctk.CTkLabel(self.pie_lat, text="Tecnico", font=("Segoe UI", 10, "bold"), text_color=TEXTO3).pack(anchor="w")
+            ctk.CTkLabel(self.pie_lat, text=lic["nombre"], font=("Segoe UI", 12, "bold"), text_color=VERDE).pack(anchor="w")
+        else:
+            ctk.CTkLabel(self.pie_lat, text="Version gratuita", font=("Segoe UI", 11), text_color=TEXTO3).pack(anchor="w")
+            ctk.CTkLabel(
+                self.pie_lat, text="Activa tu licencia desde\nModo tecnico", font=("Segoe UI", 11), text_color=TEXTO2, justify="left"
+            ).pack(anchor="w", pady=(2, 0))
 
     def _construir(self):
-        franja = ctk.CTkFrame(self, fg_color="transparent")
-        franja.pack(fill="x", padx=26, pady=(8, 8))
-
+        barra_estado = ctk.CTkFrame(self, height=32, corner_radius=0, fg_color=PANEL)
+        barra_estado.pack(fill="x", side="bottom")
         self.lbl_estado = ctk.CTkLabel(
-            franja, text="Listo.", font=("Segoe UI", 13), text_color=GRIS, wraplength=760, justify="left"
+            barra_estado, text="Listo.", font=("Segoe UI", 12), text_color=TEXTO2, anchor="w"
         )
-        self.lbl_estado.pack(side="left", fill="x", expand=True)
-
-        ctk.CTkButton(franja, text="Abrir Descargas", width=130, height=30, command=self.abrir_descargas).pack(
-            side="right", padx=(12, 0)
-        )
-
-        ctk.CTkButton(
-            franja, text="Modo tecnico", width=120, height=30, command=self._abrir_modo_tecnico
-        ).pack(side="right", padx=(8, 0))
-
-        self.lbl_aviso = ctk.CTkLabel(self, text="", font=("Segoe UI", 13, "bold"), text_color=AMBAR, justify="left", anchor="w")
-        self.lbl_aviso.pack(fill="x", padx=28)
-
-        barra_srv = ctk.CTkFrame(self, corner_radius=14)
-        barra_srv.pack(fill="x", padx=26, pady=(6, 10))
-
-        zona_srv = ctk.CTkFrame(barra_srv, fg_color="transparent")
-        zona_srv.pack(fill="x", padx=18, pady=12)
-
-        ctk.CTkLabel(zona_srv, text="SERVICIO ACTIVO", font=("Segoe UI", 12, "bold"), text_color=ACENTO).pack(side="left", padx=(2, 12))
-
-        self.btn_servicio = ctk.CTkButton(
-            zona_srv,
-            text="-- Sin servicios --",
-            width=380,
-            height=32,
-            anchor="w",
-            font=("Segoe UI", 13),
-            command=self._abrir_selector_servicio,
-        )
-        self.btn_servicio.pack(side="left")
-
-        self.lbl_info_servicio = ctk.CTkLabel(zona_srv, text="", font=("Segoe UI", 12), text_color=GRIS)
-        self.lbl_info_servicio.pack(side="left", padx=14)
-
-        ctk.CTkButton(
-            zona_srv,
-            text="+ Nuevo servicio",
-            width=150,
-            height=30,
-            command=self._dialogo_nuevo_servicio,
-        ).pack(side="right")
+        self.lbl_estado.pack(side="left", padx=16, pady=4)
 
         medio = ctk.CTkFrame(self, fg_color="transparent")
-        medio.pack(fill="both", expand=True, padx=26, pady=4)
+        medio.pack(fill="both", expand=True)
         medio.grid_columnconfigure(0, weight=0)
         medio.grid_columnconfigure(1, weight=1)
         medio.grid_rowconfigure(0, weight=1)
 
-        card_scan = ctk.CTkFrame(medio, corner_radius=16)
-        card_scan.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        barra_lat = ctk.CTkFrame(medio, width=220, corner_radius=0, fg_color=PANEL)
+        barra_lat.grid(row=0, column=0, sticky="nsew")
+        barra_lat.grid_propagate(False)
 
-        ctk.CTkLabel(card_scan, text="NUEVO ESCANEO", font=("Segoe UI", 15, "bold"), text_color=ACENTO).pack(anchor="w", padx=22, pady=(20, 4))
+        marca = ctk.CTkFrame(barra_lat, fg_color="transparent")
+        marca.pack(fill="x", padx=20, pady=(24, 18))
+        ctk.CTkLabel(marca, text="OptiChek", font=("Segoe UI", 26, "bold"), text_color=TEXTO).pack(anchor="w")
         ctk.CTkLabel(
-            card_scan,
-            text="Analiza hardware, discos y SMART,\nRAM, CPU, programas de inicio,\ntemperaturas y bateria del equipo.\n\nGenera un PDF con:\n- Resumen simple para el cliente\n- Informe tecnico completo",
-            font=("Segoe UI", 13),
-            justify="left",
-        ).pack(anchor="w", padx=22)
+            marca, text=f"Diagnostico tecnico v{nucleo.VERSION}", font=("Segoe UI", 11), text_color=TEXTO3
+        ).pack(anchor="w")
 
-        ctk.CTkLabel(card_scan, text="Nombre del escaneo (opcional)", font=("Segoe UI", 12, "bold"), anchor="w").pack(
-            fill="x", padx=22, pady=(14, 2)
+        sec_srv = ctk.CTkFrame(barra_lat, fg_color="transparent")
+        sec_srv.pack(fill="x", padx=14, pady=(4, 12))
+        ctk.CTkLabel(sec_srv, text="SERVICIO ACTIVO", font=("Segoe UI", 11, "bold"), text_color=TEXTO3).pack(
+            anchor="w", padx=4, pady=(0, 6)
         )
-        self.ent_nombre = ctk.CTkEntry(card_scan, height=32, placeholder_text="Ej: Limpieza inicial")
-        self.ent_nombre.pack(fill="x", padx=22)
+        self.btn_servicio = ctk.CTkButton(
+            sec_srv,
+            text="-- Sin servicios --",
+            height=38,
+            corner_radius=10,
+            anchor="w",
+            font=("Segoe UI", 12, "bold"),
+            fg_color=CARD,
+            hover_color=ACENTO,
+            text_color=TEXTO,
+            command=self._abrir_selector_servicio,
+        )
+        self.btn_servicio.pack(fill="x")
+        self.lbl_info_servicio = ctk.CTkLabel(sec_srv, text="", font=("Segoe UI", 11), text_color=TEXTO3)
+        self.lbl_info_servicio.pack(anchor="w", padx=4, pady=(6, 0))
+        ctk.CTkButton(
+            sec_srv,
+            text="+ Nuevo servicio",
+            height=34,
+            corner_radius=10,
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDE,
+            text_color=TEXTO,
+            hover_color=CARD,
+            font=("Segoe UI", 12),
+            command=self._dialogo_nuevo_servicio,
+        ).pack(fill="x", pady=(10, 0))
 
+        sec_acc = ctk.CTkFrame(barra_lat, fg_color="transparent")
+        sec_acc.pack(fill="x", padx=14, pady=(4, 0))
+        ctk.CTkLabel(sec_acc, text="ACCIONES", font=("Segoe UI", 11, "bold"), text_color=TEXTO3).pack(
+            anchor="w", padx=4, pady=(0, 6)
+        )
         self.btn_escanear = ctk.CTkButton(
-            card_scan,
+            sec_acc,
             text="Iniciar escaneo",
-            height=46,
-            font=("Segoe UI", 16, "bold"),
+            height=40,
+            corner_radius=10,
+            font=("Segoe UI", 13, "bold"),
+            fg_color=ACENTO,
+            hover_color="#1d4ed8",
+            text_color="#ffffff",
             command=self.iniciar_escaneo,
         )
-        self.btn_escanear.pack(fill="x", padx=22, pady=(10, 10))
+        self.btn_escanear.pack(fill="x")
+        ctk.CTkButton(
+            sec_acc,
+            text="Modo tecnico",
+            height=34,
+            corner_radius=10,
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDE,
+            text_color=TEXTO,
+            hover_color=CARD,
+            font=("Segoe UI", 12),
+            command=self._abrir_modo_tecnico,
+        ).pack(fill="x", pady=(10, 0))
+        ctk.CTkButton(
+            sec_acc,
+            text="Abrir Descargas",
+            height=34,
+            corner_radius=10,
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDE,
+            text_color=TEXTO,
+            hover_color=CARD,
+            font=("Segoe UI", 12),
+            command=self.abrir_descargas,
+        ).pack(fill="x", pady=(8, 0))
 
-        self.barra = ctk.CTkProgressBar(card_scan, height=10)
+        lic = nucleo.tecnico_licenciado()
+        self.pie_lat = ctk.CTkFrame(barra_lat, fg_color="transparent")
+        self.pie_lat.pack(side="bottom", fill="x", padx=20, pady=(0, 16))
+        if lic:
+            ctk.CTkLabel(self.pie_lat, text="Tecnico", font=("Segoe UI", 10, "bold"), text_color=TEXTO3).pack(anchor="w")
+            ctk.CTkLabel(self.pie_lat, text=lic["nombre"], font=("Segoe UI", 12, "bold"), text_color=VERDE).pack(anchor="w")
+        else:
+            ctk.CTkLabel(self.pie_lat, text="Version gratuita", font=("Segoe UI", 11), text_color=TEXTO3).pack(anchor="w")
+            ctk.CTkLabel(
+                self.pie_lat, text="Activa tu licencia desde\nModo tecnico", font=("Segoe UI", 11), text_color=TEXTO2, justify="left"
+            ).pack(anchor="w", pady=(2, 0))
+
+        principal = ctk.CTkFrame(medio, fg_color=FONDO)
+        principal.grid(row=0, column=1, sticky="nsew")
+
+        self.lbl_aviso = ctk.CTkLabel(
+            principal, text="", font=("Segoe UI", 12, "bold"), text_color=AMBAR, anchor="w", justify="left", wraplength=780
+        )
+        self.lbl_aviso.pack(fill="x", padx=24, pady=(14, 0))
+
+        cuerpo = ctk.CTkFrame(principal, fg_color="transparent")
+        cuerpo.pack(fill="both", expand=True, padx=24, pady=(12, 0))
+        cuerpo.grid_columnconfigure(0, weight=0)
+        cuerpo.grid_columnconfigure(1, weight=1)
+        cuerpo.grid_rowconfigure(0, weight=1)
+
+        card_scan = ctk.CTkFrame(cuerpo, width=330, corner_radius=14, fg_color=CARD)
+        card_scan.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        card_scan.grid_propagate(False)
+
+        ctk.CTkLabel(card_scan, text="NUEVO ESCANEO", font=("Segoe UI", 14, "bold"), text_color=ACENTO).pack(
+            anchor="w", padx=22, pady=(20, 4)
+        )
+        ctk.CTkLabel(
+            card_scan,
+            text="Hardware, discos y SMART, RAM, CPU\nprogramas de inicio, temperaturas y\nbateria del equipo.\n\nGenera el PDF (simple para el cliente +\ntecnico completo) directamente en\nDescargas, sin abrir navegador.",
+            font=("Segoe UI", 12),
+            text_color=TEXTO2,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", padx=22)
+
+        ctk.CTkLabel(card_scan, text="Nombre del escaneo (opcional)", font=("Segoe UI", 12, "bold"), text_color=TEXTO).pack(
+            fill="x", padx=22, pady=(16, 4)
+        )
+        self.ent_nombre = ctk.CTkEntry(
+            card_scan, height=36, corner_radius=10, fg_color=FONDO, border_color=BORDE,
+            placeholder_text="Ej: Limpieza inicial",
+        )
+        self.ent_nombre.pack(fill="x", padx=22)
+
+        self.barra = ctk.CTkProgressBar(card_scan, height=8, progress_color=ACENTO)
         self.barra.set(0)
-        self.barra.pack(fill="x", padx=22)
+        self.barra.pack(fill="x", padx=22, pady=(18, 0))
 
-        self.lbl_progreso = ctk.CTkLabel(card_scan, text="", font=("Segoe UI", 12), text_color=GRIS, wraplength=280, justify="left")
+        self.lbl_progreso = ctk.CTkLabel(
+            card_scan, text="", font=("Segoe UI", 12), text_color=TEXTO2, wraplength=286, justify="left"
+        )
         self.lbl_progreso.pack(anchor="w", padx=22, pady=(8, 20))
 
-        card_hist = ctk.CTkFrame(medio, corner_radius=16)
+        card_hist = ctk.CTkFrame(cuerpo, corner_radius=14, fg_color=CARD)
         card_hist.grid(row=0, column=1, sticky="nsew")
 
         cab_hist = ctk.CTkFrame(card_hist, fg_color="transparent")
-        cab_hist.pack(fill="x", padx=22, pady=(20, 6))
-        ctk.CTkLabel(cab_hist, text="HISTORIAL DEL SERVICIO", font=("Segoe UI", 15, "bold"), text_color=ACENTO).pack(side="left")
-        self.lbl_cantidad = ctk.CTkLabel(cab_hist, text="0 escaneos", font=("Segoe UI", 12), text_color=GRIS)
+        cab_hist.pack(fill="x", padx=22, pady=(18, 6))
+        ctk.CTkLabel(cab_hist, text="HISTORIAL DEL SERVICIO", font=("Segoe UI", 14, "bold"), text_color=ACENTO).pack(side="left")
+        self.lbl_cantidad = ctk.CTkLabel(cab_hist, text="0 escaneos", font=("Segoe UI", 12), text_color=TEXTO2)
         self.lbl_cantidad.pack(side="right")
 
         self.frame_lista = ctk.CTkScrollableFrame(card_hist, fg_color="transparent")
-        self.frame_lista.pack(fill="both", expand=True, padx=12, pady=(0, 16))
+        self.frame_lista.pack(fill="both", expand=True, padx=14, pady=(0, 16))
 
-        card_comp = ctk.CTkFrame(self, corner_radius=16)
-        card_comp.pack(fill="x", padx=26, pady=(2, 12))
+        card_comp = ctk.CTkFrame(principal, corner_radius=14, fg_color=CARD)
+        card_comp.pack(fill="x", padx=24, pady=(14, 18))
 
         zona = ctk.CTkFrame(card_comp, fg_color="transparent")
-        zona.pack(pady=(12, 8), padx=22)
+        zona.pack(pady=(14, 12), padx=22)
 
-        ctk.CTkLabel(zona, text="COMPARAR ESCANEOS DE ESTE SERVICIO", font=("Segoe UI", 15, "bold"), text_color=ACENTO).grid(
-            row=0, column=0, columnspan=5, sticky="w", pady=(0, 8)
+        ctk.CTkLabel(zona, text="COMPARAR ESCANEOS DE ESTE SERVICIO", font=("Segoe UI", 14, "bold"), text_color=ACENTO).grid(
+            row=0, column=0, columnspan=5, sticky="w", pady=(0, 10)
         )
 
-        ctk.CTkLabel(zona, text="Comparar", font=("Segoe UI", 13)).grid(row=1, column=0, padx=(0, 8))
+        ctk.CTkLabel(zona, text="Comparar", font=("Segoe UI", 13), text_color=TEXTO2).grid(row=1, column=0, padx=(0, 8))
         self.btn_sel_a = ctk.CTkButton(
             zona,
             text="-- elegir escaneo --",
             width=250,
-            height=32,
+            height=34,
+            corner_radius=10,
             anchor="w",
             font=("Segoe UI", 12),
-            fg_color=("gray80", "gray25"),
-            hover_color=("gray70", "gray35"),
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDE,
+            hover_color=BORDE,
+            text_color=TEXTO,
             command=self._elegir_escaneo_a,
         )
         self.btn_sel_a.grid(row=1, column=1, padx=(0, 8))
 
-        ctk.CTkLabel(zona, text="con", font=("Segoe UI", 13)).grid(row=1, column=2, padx=(0, 8))
+        ctk.CTkLabel(zona, text="con", font=("Segoe UI", 13), text_color=TEXTO2).grid(row=1, column=2, padx=(0, 8))
         self.btn_sel_b = ctk.CTkButton(
             zona,
             text="-- elegir escaneo --",
             width=250,
-            height=32,
+            height=34,
+            corner_radius=10,
             anchor="w",
             font=("Segoe UI", 12),
-            fg_color=("gray80", "gray25"),
-            hover_color=("gray70", "gray35"),
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDE,
+            hover_color=BORDE,
+            text_color=TEXTO,
             command=self._elegir_escaneo_b,
         )
         self.btn_sel_b.grid(row=1, column=3, padx=(0, 16))
@@ -446,8 +553,12 @@ class App(ctk.CTk):
         self.btn_comparar = ctk.CTkButton(
             zona,
             text="Generar PDF de diferencias",
-            height=34,
-            font=("Segoe UI", 14, "bold"),
+            height=38,
+            corner_radius=10,
+            font=("Segoe UI", 13, "bold"),
+            fg_color=ACENTO,
+            hover_color="#1d4ed8",
+            text_color="#ffffff",
             command=self.comparar,
         )
         self.btn_comparar.grid(row=1, column=4)
@@ -645,7 +756,7 @@ class App(ctk.CTk):
             self.btn_comparar.configure(state="disabled")
 
     def _fila_historial(self, item):
-        fila = ctk.CTkFrame(self.frame_lista, corner_radius=10, fg_color=("gray88", "gray17"))
+        fila = ctk.CTkFrame(self.frame_lista, corner_radius=10, fg_color=FONDO)
         fila.pack(fill="x", pady=4, padx=2)
 
         info = ctk.CTkFrame(fila, fg_color="transparent")
@@ -654,35 +765,57 @@ class App(ctk.CTk):
         datos = item["datos"]
         hallazgos = nucleo.diagnosticar(datos)
         estado, clase_estado = nucleo.estado_general(hallazgos)
-        color_estado = {"pill-ok": VERDE, "pill-warn": AMBAR, "pill-mal": ROJO}.get(clase_estado, GRIS)
+        pil = {
+            "pill-ok": (VERDE, "#052e23"),
+            "pill-warn": (AMBAR, "#3a2a08"),
+            "pill-mal": (ROJO, "#3f1212"),
+        }.get(clase_estado, (TEXTO2, FONDO))
+        color_estado, fondo_estado = pil
 
         resumen = f"#{item['num']:03d}  {nucleo.nombre_escaneo(datos, item['num'])}"
-        ctk.CTkLabel(info, text=resumen, font=("Segoe UI", 13, "bold"), anchor="w").pack(anchor="w")
+        ctk.CTkLabel(info, text=resumen, font=("Segoe UI", 13, "bold"), text_color=TEXTO, anchor="w").pack(anchor="w")
 
         linea2 = ctk.CTkFrame(info, fg_color="transparent")
-        linea2.pack(fill="x")
-        ctk.CTkLabel(linea2, text=f"{datos['Fecha']}   ", font=("Segoe UI", 11), text_color=GRIS).pack(side="left")
-        ctk.CTkLabel(linea2, text=estado.title(), font=("Segoe UI", 11, "bold"), text_color=color_estado).pack(side="left")
+        linea2.pack(fill="x", pady=(3, 0))
+        ctk.CTkLabel(linea2, text=f"{datos['Fecha']}   ", font=("Segoe UI", 11), text_color=TEXTO2).pack(side="left")
+        ctk.CTkLabel(
+            linea2,
+            text=estado.title(),
+            font=("Segoe UI", 10, "bold"),
+            text_color=color_estado,
+            fg_color=fondo_estado,
+            corner_radius=6,
+            padx=8,
+            pady=2,
+        ).pack(side="left")
 
         ctk.CTkButton(
             fila,
             text="PDF",
-            width=56,
+            width=52,
             height=30,
-            fg_color=("gray70", "gray30"),
-            hover_color=("gray60", "gray40"),
-            font=("Segoe UI", 12),
+            corner_radius=8,
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDE,
+            hover_color=ACENTO,
+            text_color=TEXTO,
+            font=("Segoe UI", 11, "bold"),
             command=lambda it=item: self._pdf_de_item(it),
-        ).pack(side="right", padx=(0, 14), pady=9)
+        ).pack(side="right", padx=(0, 12), pady=9)
 
         ctk.CTkButton(
             fila,
             text="Eliminar",
-            width=76,
+            width=78,
             height=30,
-            fg_color="#b91c1c",
+            corner_radius=8,
+            fg_color="transparent",
+            border_width=1,
+            border_color="#7f1d1d",
             hover_color="#7f1d1d",
-            font=("Segoe UI", 12),
+            text_color="#f87171",
+            font=("Segoe UI", 11),
             command=lambda it=item: self._eliminar_item(it),
         ).pack(side="right", pady=9)
 

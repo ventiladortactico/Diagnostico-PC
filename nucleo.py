@@ -23,7 +23,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.16"
+VERSION = "3.17"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
