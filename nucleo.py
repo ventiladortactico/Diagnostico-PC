@@ -20,7 +20,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.7"
+VERSION = "3.8"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1365,14 +1365,14 @@ def _pdf_desde_contenido(contenido_html, nombre_base):
             navegador = _encontrar_navegador()
             if not navegador:
                 break
-            perfil = os.path.join(tmp_dir, f"perfil{intento}")
             cmd = [
                 navegador,
                 "--headless",
                 "--disable-gpu",
                 "--no-pdf-header-footer",
                 "--print-to-pdf-no-header",
-                f"--user-data-dir={perfil}",
+                "--no-first-run",
+                "--no-default-browser-check",
                 f"--print-to-pdf={ruta_pdf}",
                 "file:///" + ruta_html_tmp.replace("\\", "/"),
             ]
