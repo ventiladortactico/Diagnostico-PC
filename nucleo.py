@@ -10,6 +10,10 @@ import socket
 import hashlib
 import tempfile
 import subprocess
+import threading
+import functools
+import http.server
+import socketserver
 import unicodedata
 from datetime import datetime
 
@@ -20,7 +24,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.8"
+VERSION = "3.9"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1353,14 +1357,28 @@ def _encontrar_navegador():
     return None
 
 
+def _servidor_html_temporal(directorio):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        puerto = s.getsockname()[1]
+    maneja = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directorio)
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", puerto), maneja)
+    hilo = threading.Thread(target=httpd.serve_forever, daemon=True)
+    hilo.start()
+    return httpd, puerto
+
+
 def _pdf_desde_contenido(contenido_html, nombre_base):
     descargas = carpeta_descargas()
     ruta_pdf = os.path.join(descargas, nombre_base + ".pdf")
     tmp_dir = tempfile.mkdtemp(prefix="diag_pdf_")
     ruta_html_tmp = os.path.join(tmp_dir, "informe.html")
+    httpd = None
     try:
         with open(ruta_html_tmp, "w", encoding="utf-8") as fh:
             fh.write(contenido_html)
+        httpd, puerto = _servidor_html_temporal(tmp_dir)
+        url = f"http://127.0.0.1:{puerto}/informe.html"
         for intento in range(3):
             navegador = _encontrar_navegador()
             if not navegador:
@@ -1374,7 +1392,7 @@ def _pdf_desde_contenido(contenido_html, nombre_base):
                 "--no-first-run",
                 "--no-default-browser-check",
                 f"--print-to-pdf={ruta_pdf}",
-                "file:///" + ruta_html_tmp.replace("\\", "/"),
+                url,
             ]
             try:
                 subprocess.run(cmd, timeout=90, capture_output=True)
@@ -1386,6 +1404,12 @@ def _pdf_desde_contenido(contenido_html, nombre_base):
         shutil.copyfile(ruta_html_tmp, ruta_html_final)
         return ruta_html_final, False
     finally:
+        if httpd:
+            try:
+                httpd.shutdown()
+                httpd.server_close()
+            except Exception:
+                pass
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
