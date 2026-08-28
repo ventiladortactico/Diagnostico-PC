@@ -280,6 +280,10 @@ class App(ctk.CTk):
 
         self.title(f"OptiChek v{nucleo.VERSION}")
         self._actualizar_titulo()
+        try:
+            self.iconbitmap(nucleo.recurso("optichek_logo.ico"))
+        except Exception:
+            pass
         self.geometry("1080x760")
         self.minsize(980, 640)
 

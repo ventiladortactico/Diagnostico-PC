@@ -20,7 +20,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.4"
+VERSION = "3.5"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -50,6 +50,13 @@ def base_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def recurso(nombre):
+    pkg = getattr(sys, "_MEIPASS", None)
+    if pkg and os.path.exists(os.path.join(pkg, nombre)):
+        return os.path.join(pkg, nombre)
+    return os.path.join(base_dir(), nombre)
 
 
 def ruta_config():

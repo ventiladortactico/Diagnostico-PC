@@ -21,7 +21,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/3] Compilando con PyInstaller...
-pyinstaller --onefile --windowed --uac-admin --clean --noconfirm --hidden-import win32timezone --collect-all customtkinter --name OptiChek diagnostico.py
+pyinstaller --onefile --windowed --uac-admin --clean --noconfirm --hidden-import win32timezone --collect-all customtkinter --icon optichek_logo.ico --add-data "optichek_logo.ico;." --name OptiChek diagnostico.py
 if errorlevel 1 (
     echo [ERROR] Fallo la compilacion.
     pause
