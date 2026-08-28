@@ -23,7 +23,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.15"
+VERSION = "3.16"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1329,7 +1329,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
     return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones)
 
 
-_SERVIDOR_INFORMES = {"httpd": None, "puerto": None}
+_SERVIDOR_INFORMES = {"httpd": None, "puerto": None, "extra": {}}
 
 
 def _servidor_informes():
@@ -1344,11 +1344,9 @@ def _servidor_informes():
                 self.send_response(404)
                 self.end_headers()
                 return
-            if not (nombre.endswith(".html") or nombre.endswith(".pdf")):
-                self.send_response(403)
-                self.end_headers()
-                return
-            ruta = os.path.join(carpeta_descargas(), nombre)
+            ruta = st["extra"].get(nombre)
+            if not ruta:
+                ruta = os.path.join(carpeta_descargas(), nombre)
             if not os.path.exists(ruta):
                 self.send_response(404)
                 self.end_headers()
@@ -1361,7 +1359,7 @@ def _servidor_informes():
                 self.end_headers()
                 return
             self.send_response(200)
-            if nombre.endswith(".pdf"):
+            if ruta.lower().endswith(".pdf"):
                 self.send_header("Content-Type", "application/pdf")
             else:
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1378,6 +1376,14 @@ def _servidor_informes():
     st["httpd"] = httpd
     st["puerto"] = httpd.server_address[1]
     return st["puerto"]
+
+
+def _servir_archivo(ruta):
+    st = _SERVIDOR_INFORMES
+    puerto = _servidor_informes()
+    nombre = "informe" + str(len(st["extra"]) + 1) + os.path.splitext(ruta)[1]
+    st["extra"][nombre] = ruta
+    return f"http://127.0.0.1:{puerto}/{nombre}"
 
 
 def url_reporte(ruta):
@@ -1418,32 +1424,64 @@ def _encontrar_navegador():
 def generar_pdf_de_informe(ruta_html, ruta_pdf=None):
     if not ruta_pdf:
         ruta_pdf = os.path.join(os.path.dirname(ruta_html), os.path.splitext(os.path.basename(ruta_html))[0] + ".pdf")
-    navegador = _encontrar_navegador()
-    if not navegador:
-        return None
-    url = "file:///" + ruta_html.replace("\\", "/")
-    for _ in range(2):
-        try:
-            subprocess.run(
-                [
-                    navegador,
-                    "--headless",
-                    "--disable-gpu",
-                    "--no-pdf-header-footer",
-                    "--print-to-pdf-no-header",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    f"--print-to-pdf={ruta_pdf}",
-                    url,
-                ],
-                timeout=90,
-                capture_output=True,
-            )
-        except Exception:
-            pass
-        if os.path.exists(ruta_pdf) and os.path.getsize(ruta_pdf) > 500:
-            return ruta_pdf
+    fallos = []
+    navegadores = [
+        _encontrar_navegador(),
+        "msedge",
+        "chrome",
+        "brave",
+    ]
+    fuentes = ["file:///" + ruta_html.replace("\\", "/")]
+    try:
+        fuentes.append(_servir_archivo(ruta_html))
+    except Exception:
+        pass
+    for navegador in navegadores:
+        if not navegador:
+            continue
+        for url in fuentes:
+            for _ in range(2):
+                try:
+                    res = subprocess.run(
+                        [
+                            navegador,
+                            "--headless",
+                            "--disable-gpu",
+                            "--no-pdf-header-footer",
+                            "--print-to-pdf-no-header",
+                            "--no-first-run",
+                            "--no-default-browser-check",
+                            f"--print-to-pdf={ruta_pdf}",
+                            url,
+                        ],
+                        timeout=60,
+                        capture_output=True,
+                        text=True,
+                    )
+                    fallos.append(f"{navegador} | rc={res.returncode} | {str(res.stderr)[:300]}")
+                except Exception as exc:
+                    fallos.append(f"{navegador} | excepcion: {exc}")
+                if os.path.exists(ruta_pdf) and os.path.getsize(ruta_pdf) > 500:
+                    return ruta_pdf
+    _guardar_debug_pdf(fallos, navegadores)
     return None
+
+
+def _guardar_debug_pdf(errores, navegadores):
+    try:
+        ruta = os.path.join(tempfile.gettempdir(), "optichek_pdf_debug.txt")
+        linea = "-" * 60 + "\n"
+        contenido = datetime.now().strftime("%d/%m/%Y %H:%M:%S") + "\n" + linea
+        contenido += "Navegadores detectados:\n"
+        for nav in navegadores:
+            contenido += f"  {nav}\n"
+        contenido += linea
+        for e in errores:
+            contenido += e + "\n"
+        with open(ruta, "a", encoding="utf-8") as fh:
+            fh.write(contenido)
+    except Exception:
+        pass
 
 
 def _generar_informe_con_pdf(contenido_html, nombre_base):
