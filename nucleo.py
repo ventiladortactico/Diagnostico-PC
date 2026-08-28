@@ -8,12 +8,7 @@ import hmac
 import shutil
 import socket
 import hashlib
-import tempfile
 import subprocess
-import threading
-import functools
-import http.server
-import socketserver
 import unicodedata
 from datetime import datetime
 
@@ -24,7 +19,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.10"
+VERSION = "3.11"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -910,7 +905,7 @@ def _pagina(titulo, contenido):
 {contenido}
 </div>
 <button class="btn no-print btn-flotante" onclick="window.print()">Guardar como PDF</button>
-<p class="no-print aviso-pdf">Al imprimir desde el navegador, desactiva &quot;Cabecera y pie de pagina&quot; para que no salga la direccion del archivo abajo.</p>
+<p class="no-print aviso-pdf">Para guardar como PDF: Ctrl+P, destino &quot;Guardar como PDF&quot; y desactiva &quot;Cabecera y pie de pagina&quot; (una sola vez) para que no salga la direccion del archivo.</p>
 </body>
 </html>
 """
@@ -1330,101 +1325,26 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
     return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones)
 
 
-def _encontrar_navegador():
-    bases = [
-        os.environ.get("ProgramFiles(x86)", ""),
-        os.environ.get("ProgramFiles", ""),
-        os.environ.get("LOCALAPPDATA", ""),
-    ]
-    pares = [
-        ("msedge.exe", "Microsoft\\Edge\\Application\\msedge.exe"),
-        ("chrome.exe", "Google\\Chrome\\Application\\chrome.exe"),
-        ("brave.exe", "BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
-        ("vivaldi.exe", "Vivaldi\\Application\\vivaldi.exe"),
-        ("opera.exe", "Opera\\Application\\opera.exe"),
-    ]
-    for base in bases:
-        if not base:
-            continue
-        for nombre, rel in pares:
-            cand = os.path.join(base, rel)
-            if os.path.exists(cand):
-                return cand
-    for nombre in ("msedge", "chrome", "brave", "vivaldi", "opera"):
-        cand = shutil.which(nombre)
-        if cand:
-            return cand
-    return None
-
-
-def _servidor_html_temporal(directorio):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        puerto = s.getsockname()[1]
-    maneja = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directorio)
-    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", puerto), maneja)
-    hilo = threading.Thread(target=httpd.serve_forever, daemon=True)
-    hilo.start()
-    return httpd, puerto
-
-
-def _pdf_desde_contenido(contenido_html, nombre_base):
+def _guardar_informe_html(contenido_html, nombre_base):
     descargas = carpeta_descargas()
-    ruta_pdf = os.path.join(descargas, nombre_base + ".pdf")
-    tmp_dir = tempfile.mkdtemp(prefix="diag_pdf_")
-    ruta_html_tmp = os.path.join(tmp_dir, "informe.html")
-    httpd = None
-    try:
-        with open(ruta_html_tmp, "w", encoding="utf-8") as fh:
-            fh.write(contenido_html)
-        httpd, puerto = _servidor_html_temporal(tmp_dir)
-        url = f"http://127.0.0.1:{puerto}/informe.html"
-        for intento in range(3):
-            navegador = _encontrar_navegador()
-            if not navegador:
-                break
-            cmd = [
-                navegador,
-                "--headless",
-                "--disable-gpu",
-                "--no-pdf-header-footer",
-                "--print-to-pdf-no-header",
-                "--no-first-run",
-                "--no-default-browser-check",
-                f"--print-to-pdf={ruta_pdf}",
-                url,
-            ]
-            try:
-                subprocess.run(cmd, timeout=90, capture_output=True)
-            except Exception:
-                pass
-            if os.path.exists(ruta_pdf) and os.path.getsize(ruta_pdf) > 500:
-                return ruta_pdf, True
-        ruta_html_final = os.path.join(descargas, nombre_base + ".html")
-        shutil.copyfile(ruta_html_tmp, ruta_html_final)
-        return ruta_html_final, False
-    finally:
-        if httpd:
-            try:
-                httpd.shutdown()
-                httpd.server_close()
-            except Exception:
-                pass
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    ruta_html = os.path.join(descargas, nombre_base + ".html")
+    with open(ruta_html, "w", encoding="utf-8") as fh:
+        fh.write(contenido_html)
+    return ruta_html
 
 
-def generar_pdf_escaneo(datos, num, servicio=None):
+def generar_informe_escaneo(datos, num, servicio=None):
     contenido = generar_html_escaneo(datos, num, servicio)
     sid = (servicio or {}).get("Id", "SRV")
     nombre_slug = slug_equipo(nombre_escaneo(datos, num))[:24].strip("_")
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    return _pdf_desde_contenido(contenido, f"{sid}_Escaneo{num:03d}_{nombre_slug}_{stamp}")
+    return _guardar_informe_html(contenido, f"{sid}_Escaneo{num:03d}_{nombre_slug}_{stamp}")
 
 
-def generar_pdf_comparacion(a, b, et_a, et_b, servicio=None):
+def generar_informe_comparacion(a, b, et_a, et_b, servicio=None):
     contenido = generar_html_diferencias(a, b, et_a, et_b, servicio)
     sid = (servicio or {}).get("Id", "SRV")
     na = et_a.replace("#", "")
     nb = et_b.replace("#", "")
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    return _pdf_desde_contenido(contenido, f"{sid}_Comparacion_{na}_vs_{nb}_{stamp}")
+    return _guardar_informe_html(contenido, f"{sid}_Comparacion_{na}_vs_{nb}_{stamp}")

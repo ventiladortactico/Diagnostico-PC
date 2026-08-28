@@ -737,12 +737,9 @@ class App(ctk.CTk):
             self._progreso("Guardando en el historial del servicio...")
             num, _ruta = nucleo.guardar_escaneo(datos, sid, nombre)
             self._progreso("Generando PDF en Descargas...")
-            salida, es_pdf = nucleo.generar_pdf_escaneo(datos, num, servicio)
+            salida = nucleo.generar_informe_escaneo(datos, num, servicio)
             nombre = os.path.basename(salida)
-            if es_pdf:
-                self._terminar(True, f"Escaneo #{num:03d} completado. PDF descargado en Descargas: {nombre}", salida)
-            else:
-                self._terminar(True, f"No se encontro Edge/Chrome para convertir a PDF, se descargo el informe en HTML: {nombre}", salida)
+            self._terminar(True, f"Escaneo #{num:03d} completado. Informe abierto en el navegador. Para el PDF: Ctrl+P.", salida)
         except Exception as e:
             self._terminar(False, f"Error durante el escaneo: {e}")
         finally:
@@ -783,12 +780,9 @@ class App(ctk.CTk):
             servicio = nucleo.cargar_servicio(self.servicio_activo)
             et_a = f"#{item_a['num']:03d}"
             et_b = f"#{item_b['num']:03d}"
-            salida, es_pdf = nucleo.generar_pdf_comparacion(item_a["datos"], item_b["datos"], et_a, et_b, servicio)
+            salida = nucleo.generar_informe_comparacion(item_a["datos"], item_b["datos"], et_a, et_b, servicio)
             nombre = os.path.basename(salida)
-            if es_pdf:
-                self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. PDF descargado en Descargas: {nombre}", salida)
-            else:
-                self._terminar(True, f"No se encontro Edge/Chrome, se descargo la comparacion en HTML: {nombre}", salida)
+            self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. Informe abierto en el navegador. Para el PDF: Ctrl+P.", salida)
         except Exception as e:
             self._terminar(False, f"Error al generar la comparacion: {e}")
         finally:
@@ -803,7 +797,7 @@ class App(ctk.CTk):
         if self.ocupado:
             return
         self._set_ocupado(True)
-        self._estado(f"Regenerando PDF del escaneo #{item['num']:03d}...", GRIS)
+        self._estado(f"Abriendo informe del escaneo #{item['num']:03d}...", GRIS)
         threading.Thread(target=self._hilo_pdf_item, args=(item,), daemon=True).start()
 
     def _hilo_pdf_item(self, item):
@@ -816,9 +810,9 @@ class App(ctk.CTk):
             except Exception:
                 pass
             servicio = nucleo.cargar_servicio(self.servicio_activo)
-            salida, es_pdf = nucleo.generar_pdf_escaneo(item["datos"], item["num"], servicio)
+            salida = nucleo.generar_informe_escaneo(item["datos"], item["num"], servicio)
             nombre = os.path.basename(salida)
-            self._terminar(True, f"PDF del escaneo #{item['num']:03d} descargado en Descargas: {nombre}", salida if es_pdf else None)
+            self._terminar(True, f"Informe del escaneo #{item['num']:03d} abierto en el navegador. Para el PDF: Ctrl+P.", salida)
         except Exception as e:
             self._terminar(False, f"Error al generar el PDF: {e}")
         finally:
