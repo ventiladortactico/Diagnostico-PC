@@ -20,7 +20,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.6"
+VERSION = "3.7"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1327,16 +1327,30 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
 
 
 def _encontrar_navegador():
-    candidatos = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    bases = [
+        os.environ.get("ProgramFiles", ""),
+        os.environ.get("ProgramFiles(x86)", ""),
+        os.environ.get("LOCALAPPDATA", ""),
     ]
-    for cand in candidatos:
-        if os.path.exists(cand):
+    pares = [
+        ("msedge.exe", "Microsoft\\Edge\\Application\\msedge.exe"),
+        ("chrome.exe", "Google\\Chrome\\Application\\chrome.exe"),
+        ("brave.exe", "BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+        ("vivaldi.exe", "Vivaldi\\Application\\vivaldi.exe"),
+        ("opera.exe", "Opera\\Application\\opera.exe"),
+    ]
+    for base in bases:
+        if not base:
+            continue
+        for nombre, rel in pares:
+            cand = os.path.join(base, rel)
+            if os.path.exists(cand):
+                return cand
+    for nombre in ("msedge", "chrome", "brave", "vivaldi", "opera"):
+        cand = shutil.which(nombre)
+        if cand:
             return cand
-    return shutil.which("msedge") or shutil.which("chrome")
+    return None
 
 
 def _pdf_desde_contenido(contenido_html, nombre_base):
