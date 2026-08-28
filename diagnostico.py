@@ -738,13 +738,11 @@ class App(ctk.CTk):
             self._progreso("Guardando en el historial del servicio...")
             num, _ruta = nucleo.guardar_escaneo(datos, sid, nombre)
             self._progreso("Generando PDF en Descargas...")
-            ruta_html = nucleo.generar_informe_escaneo(datos, num, servicio)
-            ruta_pdf = nucleo.generar_pdf_de_informe(ruta_html)
-            if ruta_pdf:
-                os.remove(ruta_html)
-                self._terminar(True, f"Escaneo #{num:03d} completado. PDF guardado en Descargas: {os.path.basename(ruta_pdf)}")
+            salida, es_pdf = nucleo.generar_informe_escaneo(datos, num, servicio)
+            if es_pdf:
+                self._terminar(True, f"Escaneo #{num:03d} completado. PDF guardado en Descargas: {os.path.basename(salida)}")
             else:
-                self._terminar(True, f"Escaneo #{num:03d} completado. Informe HTML en Descargas: {os.path.basename(ruta_html)} (no se pudo generar el PDF)")
+                self._terminar(True, f"Escaneo #{num:03d} completado. Informe HTML en Descargas: {os.path.basename(salida)} (no se pudo generar el PDF)")
         except Exception as e:
             self._terminar(False, f"Error durante el escaneo: {e}")
         finally:
@@ -785,11 +783,9 @@ class App(ctk.CTk):
             servicio = nucleo.cargar_servicio(self.servicio_activo)
             et_a = f"#{item_a['num']:03d}"
             et_b = f"#{item_b['num']:03d}"
-            salida = nucleo.generar_informe_comparacion(item_a["datos"], item_b["datos"], et_a, et_b, servicio)
-            ruta_pdf = nucleo.generar_pdf_de_informe(salida)
-            if ruta_pdf:
-                os.remove(salida)
-                self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. PDF guardado en Descargas: {os.path.basename(ruta_pdf)}")
+            salida, es_pdf = nucleo.generar_informe_comparacion(item_a["datos"], item_b["datos"], et_a, et_b, servicio)
+            if es_pdf:
+                self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. PDF guardado en Descargas: {os.path.basename(salida)}")
             else:
                 self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. Informe HTML en Descargas: {os.path.basename(salida)} (no se pudo generar el PDF)")
         except Exception as e:
@@ -819,13 +815,11 @@ class App(ctk.CTk):
             except Exception:
                 pass
             servicio = nucleo.cargar_servicio(self.servicio_activo)
-            ruta_html = nucleo.generar_informe_escaneo(item["datos"], item["num"], servicio)
-            ruta_pdf = nucleo.generar_pdf_de_informe(ruta_html)
-            if ruta_pdf:
-                os.remove(ruta_html)
-                self._terminar(True, f"PDF del escaneo #{item['num']:03d} guardado en Descargas: {os.path.basename(ruta_pdf)}")
+            salida, es_pdf = nucleo.generar_informe_escaneo(item["datos"], item["num"], servicio)
+            if es_pdf:
+                self._terminar(True, f"PDF del escaneo #{item['num']:03d} guardado en Descargas: {os.path.basename(salida)}")
             else:
-                self._terminar(True, f"No se pudo generar el PDF del #{item['num']:03d}. Informe HTML guardado en Descargas: {os.path.basename(ruta_html)}")
+                self._terminar(True, f"No se pudo generar el PDF del #{item['num']:03d}. Informe HTML guardado en Descargas: {os.path.basename(salida)}")
         except Exception as e:
             self._terminar(False, f"Error al generar el PDF: {e}")
         finally:

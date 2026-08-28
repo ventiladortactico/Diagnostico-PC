@@ -8,6 +8,7 @@ import hmac
 import shutil
 import socket
 import hashlib
+import tempfile
 import threading
 import http.server
 import socketserver
@@ -22,7 +23,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.14"
+VERSION = "3.15"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1414,10 +1415,9 @@ def _encontrar_navegador():
     return None
 
 
-def generar_pdf_de_informe(ruta_html):
-    descargas_dir = os.path.dirname(ruta_html)
-    base = os.path.splitext(os.path.basename(ruta_html))[0]
-    ruta_pdf = os.path.join(descargas_dir, base + ".pdf")
+def generar_pdf_de_informe(ruta_html, ruta_pdf=None):
+    if not ruta_pdf:
+        ruta_pdf = os.path.join(os.path.dirname(ruta_html), os.path.splitext(os.path.basename(ruta_html))[0] + ".pdf")
     navegador = _encontrar_navegador()
     if not navegador:
         return None
@@ -1446,12 +1446,23 @@ def generar_pdf_de_informe(ruta_html):
     return None
 
 
-def _guardar_informe_html(contenido_html, nombre_base):
+def _generar_informe_con_pdf(contenido_html, nombre_base):
     descargas = carpeta_descargas()
-    ruta_html = os.path.join(descargas, nombre_base + ".html")
-    with open(ruta_html, "w", encoding="utf-8") as fh:
+    ruta_pdf_final = os.path.join(descargas, nombre_base + ".pdf")
+    tmp_dir = tempfile.mkdtemp(prefix="diag_inf_")
+    ruta_html_tmp = os.path.join(tmp_dir, "informe.html")
+    try:
+        with open(ruta_html_tmp, "w", encoding="utf-8") as fh:
+            fh.write(contenido_html)
+        ruta_pdf = generar_pdf_de_informe(ruta_html_tmp, ruta_pdf_final)
+        if ruta_pdf:
+            return ruta_pdf, True
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    ruta_html_final = os.path.join(descargas, nombre_base + ".html")
+    with open(ruta_html_final, "w", encoding="utf-8") as fh:
         fh.write(contenido_html)
-    return ruta_html
+    return ruta_html_final, False
 
 
 def generar_informe_escaneo(datos, num, servicio=None):
@@ -1459,7 +1470,7 @@ def generar_informe_escaneo(datos, num, servicio=None):
     sid = (servicio or {}).get("Id", "SRV")
     nombre_slug = slug_equipo(nombre_escaneo(datos, num))[:24].strip("_")
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    return _guardar_informe_html(contenido, f"{sid}_Escaneo{num:03d}_{nombre_slug}_{stamp}")
+    return _generar_informe_con_pdf(contenido, f"{sid}_Escaneo{num:03d}_{nombre_slug}_{stamp}")
 
 
 def generar_informe_comparacion(a, b, et_a, et_b, servicio=None):
@@ -1468,4 +1479,4 @@ def generar_informe_comparacion(a, b, et_a, et_b, servicio=None):
     na = et_a.replace("#", "")
     nb = et_b.replace("#", "")
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    return _guardar_informe_html(contenido, f"{sid}_Comparacion_{na}_vs_{nb}_{stamp}")
+    return _generar_informe_con_pdf(contenido, f"{sid}_Comparacion_{na}_vs_{nb}_{stamp}")
