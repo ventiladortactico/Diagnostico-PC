@@ -19,7 +19,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.11"
+VERSION = "3.12"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -905,7 +905,7 @@ def _pagina(titulo, contenido):
 {contenido}
 </div>
 <button class="btn no-print btn-flotante" onclick="window.print()">Guardar como PDF</button>
-<p class="no-print aviso-pdf">Para guardar como PDF: Ctrl+P, destino &quot;Guardar como PDF&quot; y desactiva &quot;Cabecera y pie de pagina&quot; (una sola vez) para que no salga la direccion del archivo.</p>
+<p class="no-print aviso-pdf">Ya tenes el informe en pantalla. En OptiChek podes guardarlo como PDF con un clic (sale sin la direccion del archivo). Si imprimis desde el navegador: Ctrl+P y desactiva &quot;Cabecera y pie de pagina&quot;.</p>
 </body>
 </html>
 """
@@ -1323,6 +1323,65 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
     secciones += f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION}.</p>"
 
     return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones)
+
+
+def _encontrar_navegador():
+    bases = [
+        os.environ.get("ProgramFiles(x86)", ""),
+        os.environ.get("ProgramFiles", ""),
+        os.environ.get("LOCALAPPDATA", ""),
+    ]
+    pares = [
+        ("msedge.exe", "Microsoft\\Edge\\Application\\msedge.exe"),
+        ("chrome.exe", "Google\\Chrome\\Application\\chrome.exe"),
+        ("brave.exe", "BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+        ("vivaldi.exe", "Vivaldi\\Application\\vivaldi.exe"),
+        ("opera.exe", "Opera\\Application\\opera.exe"),
+    ]
+    for base in bases:
+        if not base:
+            continue
+        for nombre, rel in pares:
+            cand = os.path.join(base, rel)
+            if os.path.exists(cand):
+                return cand
+    for nombre in ("msedge", "chrome", "brave", "vivaldi", "opera"):
+        cand = shutil.which(nombre)
+        if cand:
+            return cand
+    return None
+
+
+def generar_pdf_de_informe(ruta_html):
+    descargas_dir = os.path.dirname(ruta_html)
+    base = os.path.splitext(os.path.basename(ruta_html))[0]
+    ruta_pdf = os.path.join(descargas_dir, base + ".pdf")
+    navegador = _encontrar_navegador()
+    if not navegador:
+        return None
+    url = "file:///" + ruta_html.replace("\\", "/")
+    for _ in range(2):
+        try:
+            subprocess.run(
+                [
+                    navegador,
+                    "--headless",
+                    "--disable-gpu",
+                    "--no-pdf-header-footer",
+                    "--print-to-pdf-no-header",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    f"--print-to-pdf={ruta_pdf}",
+                    url,
+                ],
+                timeout=90,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+        if os.path.exists(ruta_pdf) and os.path.getsize(ruta_pdf) > 500:
+            return ruta_pdf
+    return None
 
 
 def _guardar_informe_html(contenido_html, nombre_base):
