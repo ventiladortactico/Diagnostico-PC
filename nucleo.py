@@ -23,7 +23,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.17"
+VERSION = "3.18"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1421,6 +1421,42 @@ def _encontrar_navegador():
     return None
 
 
+def _perfil_edge_tmp(sufijo):
+    carpeta = os.path.join(tempfile.gettempdir(), "optichek_pdf_perfil_" + str(sufijo))
+    try:
+        shutil.rmtree(carpeta, ignore_errors=True)
+    except Exception:
+        pass
+    try:
+        os.makedirs(carpeta, exist_ok=True)
+    except Exception:
+        pass
+    return carpeta
+
+
+def _es_pdf_valido(ruta):
+    try:
+        if not os.path.exists(ruta) or os.path.getsize(ruta) < 1000:
+            return False
+        with open(ruta, "rb") as fh:
+            return fh.read(5) == b"%PDF-"
+    except Exception:
+        return False
+
+
+def _firma_pdf(ruta):
+    try:
+        if not os.path.exists(ruta):
+            return "no-existe"
+        if os.path.getsize(ruta) == 0:
+            return "0-bytes"
+        with open(ruta, "rb") as fh:
+            cabecera = fh.read(16)
+        return str(cabecera[:5])
+    except Exception as exc:
+        return "error: " + str(exc)
+
+
 def generar_pdf_de_informe(ruta_html, ruta_pdf=None):
     if not ruta_pdf:
         ruta_pdf = os.path.join(os.path.dirname(ruta_html), os.path.splitext(os.path.basename(ruta_html))[0] + ".pdf")
@@ -1436,33 +1472,46 @@ def generar_pdf_de_informe(ruta_html, ruta_pdf=None):
         fuentes.append(_servir_archivo(ruta_html))
     except Exception:
         pass
+    base_perfil = os.path.join(tempfile.gettempdir(), "optichek_pdf_perfil")
+    idx = 0
     for navegador in navegadores:
         if not navegador:
             continue
         for url in fuentes:
-            for _ in range(2):
+            for intento in range(2):
+                idx += 1
+                perfil = _perfil_edge_tmp(f"{os.getpid()}_{idx}")
+                if os.path.exists(ruta_pdf):
+                    try:
+                        os.remove(ruta_pdf)
+                    except Exception:
+                        pass
+                args = [
+                    navegador,
+                    "--headless=new" if intento == 0 else "--headless",
+                    "--disable-gpu",
+                    "--disable-background-mode",
+                    f"--user-data-dir={perfil}",
+                    "--no-pdf-header-footer",
+                    "--print-to-pdf-no-header",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    f"--print-to-pdf={ruta_pdf}",
+                    url,
+                ]
                 try:
-                    res = subprocess.run(
-                        [
-                            navegador,
-                            "--headless",
-                            "--disable-gpu",
-                            "--no-pdf-header-footer",
-                            "--print-to-pdf-no-header",
-                            "--no-first-run",
-                            "--no-default-browser-check",
-                            f"--print-to-pdf={ruta_pdf}",
-                            url,
-                        ],
-                        timeout=60,
-                        capture_output=True,
-                        text=True,
+                    res = subprocess.run(args, timeout=60, capture_output=True, text=True)
+                    fallos.append(
+                        f"{navegador} | {os.path.basename(url)[:60]} | file://{intento} | rc={res.returncode}"
+                        f" | firma={_firma_pdf(ruta_pdf)}"
+                        f" | size={(os.path.getsize(ruta_pdf) if os.path.exists(ruta_pdf) else 0)}"
+                        f" | stderr={str(res.stderr)[:160]}"
                     )
-                    fallos.append(f"{navegador} | rc={res.returncode} | {str(res.stderr)[:300]}")
                 except Exception as exc:
-                    fallos.append(f"{navegador} | excepcion: {exc}")
-                if os.path.exists(ruta_pdf) and os.path.getsize(ruta_pdf) > 500:
+                    fallos.append(f"{navegador} | {os.path.basename(url)[:60]} | intento{intento} | excepcion: {exc}")
+                if _es_pdf_valido(ruta_pdf):
                     return ruta_pdf
+    shutil.rmtree(base_perfil, ignore_errors=True)
     _guardar_debug_pdf(fallos, navegadores)
     return None
 
@@ -1475,6 +1524,11 @@ def _guardar_debug_pdf(errores, navegadores):
         contenido += "Navegadores detectados:\n"
         for nav in navegadores:
             contenido += f"  {nav}\n"
+        try:
+            salida = subprocess.run(["tasklist", "/FI", "IMAGENAME eq msedge.exe"], capture_output=True, text=True, timeout=10).stdout
+            contenido += "Instancias de Edge abiertas: " + str(salida.count("msedge.exe")) + "\n"
+        except Exception:
+            pass
         contenido += linea
         for e in errores:
             contenido += e + "\n"
@@ -1489,12 +1543,17 @@ def _generar_informe_con_pdf(contenido_html, nombre_base):
     ruta_pdf_final = os.path.join(descargas, nombre_base + ".pdf")
     tmp_dir = tempfile.mkdtemp(prefix="diag_inf_")
     ruta_html_tmp = os.path.join(tmp_dir, "informe.html")
+    ruta_pdf_tmp = os.path.join(tmp_dir, "informe.pdf")
     try:
         with open(ruta_html_tmp, "w", encoding="utf-8") as fh:
             fh.write(contenido_html)
-        ruta_pdf = generar_pdf_de_informe(ruta_html_tmp, ruta_pdf_final)
+        ruta_pdf = generar_pdf_de_informe(ruta_html_tmp, ruta_pdf_tmp)
         if ruta_pdf:
-            return ruta_pdf, True
+            try:
+                shutil.copy2(ruta_pdf_tmp, ruta_pdf_final)
+                return ruta_pdf_final, True
+            except Exception:
+                return ruta_pdf_tmp, True
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     ruta_html_final = os.path.join(descargas, nombre_base + ".html")
