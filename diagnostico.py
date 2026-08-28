@@ -738,10 +738,13 @@ class App(ctk.CTk):
             self._progreso("Guardando en el historial del servicio...")
             num, _ruta = nucleo.guardar_escaneo(datos, sid, nombre)
             self._progreso("Generando PDF en Descargas...")
-            salida = nucleo.generar_informe_escaneo(datos, num, servicio)
-            nombre = os.path.basename(salida)
-            self._terminar(True, f"Escaneo #{num:03d} completado. Informe abierto en el navegador.", salida)
-            self._ui(lambda: self._preguntar_pdf(salida, f"#{num:03d}"))
+            ruta_html = nucleo.generar_informe_escaneo(datos, num, servicio)
+            ruta_pdf = nucleo.generar_pdf_de_informe(ruta_html)
+            if ruta_pdf:
+                os.remove(ruta_html)
+                self._terminar(True, f"Escaneo #{num:03d} completado. PDF guardado en Descargas: {os.path.basename(ruta_pdf)}")
+            else:
+                self._terminar(True, f"Escaneo #{num:03d} completado. Informe HTML en Descargas: {os.path.basename(ruta_html)} (no se pudo generar el PDF)")
         except Exception as e:
             self._terminar(False, f"Error durante el escaneo: {e}")
         finally:
@@ -783,9 +786,12 @@ class App(ctk.CTk):
             et_a = f"#{item_a['num']:03d}"
             et_b = f"#{item_b['num']:03d}"
             salida = nucleo.generar_informe_comparacion(item_a["datos"], item_b["datos"], et_a, et_b, servicio)
-            nombre = os.path.basename(salida)
-            self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. Informe abierto en el navegador.", salida)
-            self._ui(lambda: self._preguntar_pdf(salida, f"{et_a} vs {et_b}"))
+            ruta_pdf = nucleo.generar_pdf_de_informe(salida)
+            if ruta_pdf:
+                os.remove(salida)
+                self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. PDF guardado en Descargas: {os.path.basename(ruta_pdf)}")
+            else:
+                self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. Informe HTML en Descargas: {os.path.basename(salida)} (no se pudo generar el PDF)")
         except Exception as e:
             self._terminar(False, f"Error al generar la comparacion: {e}")
         finally:
@@ -816,40 +822,10 @@ class App(ctk.CTk):
             ruta_html = nucleo.generar_informe_escaneo(item["datos"], item["num"], servicio)
             ruta_pdf = nucleo.generar_pdf_de_informe(ruta_html)
             if ruta_pdf:
-                self._terminar(True, f"PDF del escaneo #{item['num']:03d} guardado en Descargas.", ruta_pdf)
+                os.remove(ruta_html)
+                self._terminar(True, f"PDF del escaneo #{item['num']:03d} guardado en Descargas: {os.path.basename(ruta_pdf)}")
             else:
-                self._terminar(False, "No se pudo generar el PDF. El informe HTML quedo en Descargas.", ruta_html)
-        except Exception as e:
-            self._terminar(False, f"Error al generar el PDF: {e}")
-        finally:
-            if co_inicializado:
-                try:
-                    import pythoncom
-                    pythoncom.CoUninitialize()
-                except Exception:
-                    pass
-
-    def _preguntar_pdf(self, ruta_html, etiqueta):
-        if messagebox.askyesno(
-            "Guardar PDF",
-            f"El informe {etiqueta} se abrio en el navegador.\n\nQueres guardar tambien el PDF (sin la direccion del archivo)?",
-        ):
-            self._generar_pdf_limpio(ruta_html, etiqueta)
-
-    def _generar_pdf_limpio(self, ruta_html, etiqueta):
-        self._set_ocupado(True)
-        self._estado(f"Generando PDF de {etiqueta}...", GRIS)
-        threading.Thread(target=self._hilo_pdf_limpio, args=(ruta_html, etiqueta), daemon=True).start()
-
-    def _hilo_pdf_limpio(self, ruta_html, etiqueta):
-        try:
-            ruta_pdf = nucleo.generar_pdf_de_informe(ruta_html)
-            if ruta_pdf:
-                self._terminar(True, f"PDF de {etiqueta} guardado en Descargas (sin direccion de archivo).", ruta_pdf)
-            else:
-                self._terminar(False, "No se pudo generar el PDF. El informe HTML quedo en Descargas.", ruta_html)
-        except Exception as e:
-            self._terminar(False, f"Error al generar el PDF: {e}")
+                self._terminar(True, f"No se pudo generar el PDF del #{item['num']:03d}. Informe HTML guardado en Descargas: {os.path.basename(ruta_html)}")
         except Exception as e:
             self._terminar(False, f"Error al generar el PDF: {e}")
         finally:

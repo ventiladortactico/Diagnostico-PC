@@ -22,7 +22,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.13"
+VERSION = "3.14"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -908,7 +908,7 @@ def _pagina(titulo, contenido):
 {contenido}
 </div>
 <button class="btn no-print btn-flotante" onclick="window.print()">Guardar como PDF</button>
-<p class="no-print aviso-pdf">Ya tenes el informe en pantalla. En OptiChek podes guardarlo como PDF con un clic (sale sin la direccion del archivo). Si imprimis desde el navegador: Ctrl+P y desactiva &quot;Cabecera y pie de pagina&quot;.</p>
+<p class="no-print aviso-pdf">Informe generado por OptiChek. Guarda la version PDF desde la aplicacion (boton PDF del historial).</p>
 </body>
 </html>
 """
