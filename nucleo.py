@@ -24,7 +24,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.9"
+VERSION = "3.10"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1332,8 +1332,8 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
 
 def _encontrar_navegador():
     bases = [
-        os.environ.get("ProgramFiles", ""),
         os.environ.get("ProgramFiles(x86)", ""),
+        os.environ.get("ProgramFiles", ""),
         os.environ.get("LOCALAPPDATA", ""),
     ]
     pares = [
