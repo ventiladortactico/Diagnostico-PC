@@ -1,6 +1,7 @@
 import os
 import threading
 import traceback
+import webbrowser
 from tkinter import filedialog
 
 import customtkinter as ctk
@@ -876,7 +877,11 @@ class App(ctk.CTk):
             self._estado(texto, VERDE if ok else ROJO)
             if abrir:
                 try:
-                    os.startfile(abrir)
+                    destino = nucleo.url_reporte(abrir)
+                    if destino.startswith("http"):
+                        webbrowser.open(destino)
+                    else:
+                        os.startfile(destino)
                 except Exception:
                     pass
         self._ui(ap)

@@ -8,6 +8,9 @@ import hmac
 import shutil
 import socket
 import hashlib
+import threading
+import http.server
+import socketserver
 import subprocess
 import unicodedata
 from datetime import datetime
@@ -19,7 +22,7 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.12"
+VERSION = "3.13"
 
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 
@@ -1323,6 +1326,65 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
     secciones += f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION}.</p>"
 
     return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones)
+
+
+_SERVIDOR_INFORMES = {"httpd": None, "puerto": None}
+
+
+def _servidor_informes():
+    st = _SERVIDOR_INFORMES
+    if st["httpd"]:
+        return st["puerto"]
+
+    class Maneja(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            nombre = self.path.lstrip("/")
+            if not nombre or "/" in nombre or "\\" in nombre:
+                self.send_response(404)
+                self.end_headers()
+                return
+            if not (nombre.endswith(".html") or nombre.endswith(".pdf")):
+                self.send_response(403)
+                self.end_headers()
+                return
+            ruta = os.path.join(carpeta_descargas(), nombre)
+            if not os.path.exists(ruta):
+                self.send_response(404)
+                self.end_headers()
+                return
+            try:
+                with open(ruta, "rb") as fh:
+                    datos = fh.read()
+            except Exception:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            if nombre.endswith(".pdf"):
+                self.send_header("Content-Type", "application/pdf")
+            else:
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(datos)))
+            self.end_headers()
+            self.wfile.write(datos)
+
+        def log_message(self, *args):
+            pass
+
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Maneja)
+    hilo = threading.Thread(target=httpd.serve_forever, daemon=True)
+    hilo.start()
+    st["httpd"] = httpd
+    st["puerto"] = httpd.server_address[1]
+    return st["puerto"]
+
+
+def url_reporte(ruta):
+    try:
+        puerto = _servidor_informes()
+        return f"http://127.0.0.1:{puerto}/{os.path.basename(ruta)}"
+    except Exception:
+        return ruta
 
 
 def _encontrar_navegador():
