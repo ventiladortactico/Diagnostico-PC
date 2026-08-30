@@ -100,13 +100,13 @@ class DialogoModoTecnico(ctk.CTkToplevel):
         self.resizable(False, False)
         self.transient(master)
         self.configure(fg_color=FONDO)
-        centrar_dialogo(self, master, 520, 360)
+        centrar_dialogo(self, master, 520, 430)
         self.grab_set()
 
         ctk.CTkLabel(self, text="MODO TECNICO", font=("Segoe UI", 18, "bold"), text_color=ACENTO).pack(pady=(22, 2))
         ctk.CTkLabel(
             self,
-            text="El tecnico certificado genera sus PDFs con su logo y WhatsApp.\nLa clave de licencia la entrega el creador de OptiChek.",
+            text="Con tu cuenta de tecnico generas PDFs con tu logo y WhatsApp.\nEl creador de OptiChek te da la clave de activacion al pagar.",
             font=("Segoe UI", 12),
             text_color=GRIS,
             justify="center",
@@ -124,65 +124,137 @@ class DialogoModoTecnico(ctk.CTkToplevel):
     def _vista_licencia(self):
         lic = nucleo.tecnico_licenciado()
         self.lic = lic
+        estado = nucleo._estado_cuenta()
         if lic:
-            self._logo = lic["logo"]
-            self.lbl_titulo_lic = ctk.CTkLabel(
-                self.cuerpo,
-                text=f"Licencia activa para {lic['nombre']}",
-                font=("Segoe UI", 14, "bold"),
-                text_color=VERDE,
-                anchor="w",
-            )
-            self.lbl_titulo_lic.pack(fill="x", pady=(6, 2))
-
-            ctk.CTkLabel(self.cuerpo, text="Logo (PNG o JPG)", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
-            fila = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
-            fila.pack(fill="x")
-            self.lbl_logo = ctk.CTkLabel(
-                fila,
-                text=os.path.basename(lic["logo"]) if lic["logo"] else "Sin logo",
-                font=("Segoe UI", 11),
-                text_color=GRIS,
-            )
-            self.lbl_logo.pack(side="left", fill="x", expand=True)
-            ctk.CTkButton(fila, text="Elegir...", width=90, height=28, command=self._elegir_logo).pack(side="right")
-
-            ctk.CTkLabel(self.cuerpo, text="WhatsApp (ej: 11 5555 4444)", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
-            self.ent_wa = ctk.CTkEntry(self.cuerpo, height=32)
-            self.ent_wa.insert(0, lic["whatsapp"])
-            self.ent_wa.pack(fill="x")
-
-            self.lbl_error = ctk.CTkLabel(self.cuerpo, text="", font=("Segoe UI", 12), text_color=ROJO)
-            self.lbl_error.pack(pady=(6, 0))
-
-            botones = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
-            botones.pack(fill="x", pady=(12, 8))
-            ctk.CTkButton(botones, text="Guardar", height=34, fg_color=VERDE, hover_color="#16a34a", command=self._guardar).pack(
-                side="left", expand=True, fill="x", padx=(0, 6)
-            )
-            ctk.CTkButton(botones, text="Quitar licencia", height=34, fg_color="transparent", text_color=ROJO, border_width=1, command=self._quitar).pack(
-                side="left", expand=True, fill="x", padx=(6, 0)
-            )
+            self._vista_activa(lic)
+        elif estado["email"]:
+            self._vista_sin_suscripcion(estado)
         else:
-            ctk.CTkLabel(self.cuerpo, text="Nombre del tecnico", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(10, 2))
-            self.ent_nombre = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="Ej: Juan Perez")
-            self.ent_nombre.pack(fill="x")
+            self._vista_login()
 
-            ctk.CTkLabel(self.cuerpo, text="Clave de licencia", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(10, 2))
-            self.ent_clave = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="XXXX-XXXX-XXXX")
-            self.ent_clave.pack(fill="x")
+    def _vista_activa(self, lic):
+        self._logo = lic["logo"]
+        ctk.CTkLabel(
+            self.cuerpo,
+            text=f"Licencia activa para {lic['nombre']}",
+            font=("Segoe UI", 14, "bold"),
+            text_color=VERDE,
+            anchor="w",
+        ).pack(fill="x", pady=(6, 2))
+        ctk.CTkLabel(
+            self.cuerpo,
+            text="Suscripcion vigente — vence el " + (lic.get("vence") or "sin caducidad"),
+            font=("Segoe UI", 11),
+            text_color=TEXTO2,
+            anchor="w",
+        ).pack(fill="x")
 
-            self.lbl_error = ctk.CTkLabel(self.cuerpo, text="", font=("Segoe UI", 12), text_color=ROJO)
-            self.lbl_error.pack(pady=(8, 0))
+        ctk.CTkLabel(self.cuerpo, text="Logo (PNG o JPG)", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
+        fila = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
+        fila.pack(fill="x")
+        self.lbl_logo = ctk.CTkLabel(
+            fila,
+            text=os.path.basename(lic["logo"]) if lic["logo"] else "Sin logo",
+            font=("Segoe UI", 11),
+            text_color=GRIS,
+        )
+        self.lbl_logo.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(fila, text="Elegir...", width=90, height=28, command=self._elegir_logo).pack(side="right")
 
-            ctk.CTkButton(
-                self.cuerpo,
-                text="Activar licencia",
-                height=38,
-                font=("Segoe UI", 14, "bold"),
-                command=self._activar,
-            ).pack(fill="x", pady=(10, 8))
-            self.bind("<Return>", lambda e: self._activar())
+        ctk.CTkLabel(self.cuerpo, text="WhatsApp (ej: 11 5555 4444)", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
+        self.ent_wa = ctk.CTkEntry(self.cuerpo, height=32)
+        self.ent_wa.insert(0, lic["whatsapp"])
+        self.ent_wa.pack(fill="x")
+
+        self.lbl_error = ctk.CTkLabel(self.cuerpo, text="", font=("Segoe UI", 12), text_color=ROJO)
+        self.lbl_error.pack(pady=(6, 0))
+
+        botones = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
+        botones.pack(fill="x", pady=(12, 8))
+        ctk.CTkButton(botones, text="Guardar", height=34, fg_color=VERDE, hover_color="#16a34a", command=self._guardar).pack(
+            side="left", expand=True, fill="x", padx=(0, 6)
+        )
+        ctk.CTkButton(botones, text="Cerrar sesion", height=34, fg_color="transparent", text_color=ROJO, border_width=1, command=self._cerrar).pack(
+            side="left", expand=True, fill="x", padx=(6, 0)
+        )
+        ctk.CTkButton(self.cuerpo, text="Renovar suscripcion (pagar)", height=28, fg_color="transparent",
+                       text_color=ACENTO, border_width=1, border_color=BORDE, command=self._pagar).pack(fill="x", pady=(0, 6))
+
+    def _vista_login(self):
+        ctk.CTkLabel(self.cuerpo, text="Ingresa con tu cuenta de tecnico", font=("Segoe UI", 14, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
+
+        ctk.CTkLabel(self.cuerpo, text="Email", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
+        self.ent_email = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="tecnico@email.com")
+        self.ent_email.pack(fill="x")
+
+        ctk.CTkLabel(self.cuerpo, text="Contrasena", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
+        self.ent_pass = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="minimo 6 caracteres", show="*")
+        self.ent_pass.pack(fill="x")
+
+        ctk.CTkLabel(self.cuerpo, text="Nombre del tecnico (solo si creas cuenta)", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(8, 2))
+        self.ent_nombre = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="Ej: Juan Perez")
+        self.ent_nombre.pack(fill="x")
+        self.ent_nombre.bind("<FocusIn>", lambda e: self.ent_nombre.get())
+
+        self.lbl_error = ctk.CTkLabel(self.cuerpo, text="", font=("Segoe UI", 12), text_color=ROJO, justify="left", wraplength=440)
+        self.lbl_error.pack(pady=(8, 0))
+
+        fila = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
+        fila.pack(fill="x", pady=(12, 4))
+        ctk.CTkButton(fila, text="Ingresar", height=34, fg_color=ACENTO, hover_color="#1d4ed8", command=self._ingresar).pack(
+            side="left", expand=True, fill="x", padx=(0, 6)
+        )
+        ctk.CTkButton(fila, text="Crear cuenta", height=34, fg_color="transparent", border_width=1, border_color=BORDE, command=self._registrar).pack(
+            side="left", expand=True, fill="x", padx=(6, 0)
+        )
+        ctk.CTkButton(self.cuerpo, text="Reenviar email de verificacion", height=28,
+                      fg_color="transparent", text_color=GRIS, command=self._reenviar).pack(fill="x", pady=(6, 0))
+        self.bind("<Return>", lambda e: self._ingresar())
+
+    def _vista_sin_suscripcion(self, estado):
+        self.estado = estado
+        vencido = nucleo.tecnico_vencido()
+        ctk.CTkLabel(
+            self.cuerpo,
+            text=f"Hola {estado['nombre'] or estado['email']}",
+            font=("Segoe UI", 14, "bold"),
+            text_color=TEXTO,
+            anchor="w",
+        ).pack(fill="x", pady=(6, 2))
+        if vencido:
+            msj = f"Tu suscripcion vencio el {vencido['vence']}. Ingresa una clave de activacion nueva para renovarla."
+        else:
+            msj = "Tu cuenta esta registrada, pero todavia no tiene una suscripcion activa. Canjea la clave que te dio el creador de OptiChek."
+        ctk.CTkLabel(self.cuerpo, text=msj, font=("Segoe UI", 12), text_color=ROJO if vencido else GRIS, justify="left", wraplength=440).pack(
+            fill="x", pady=(6, 2)
+        )
+
+        ctk.CTkLabel(self.cuerpo, text="Clave de activacion", font=("Segoe UI", 13, "bold"), anchor="w").pack(fill="x", pady=(10, 2))
+        self.ent_clave = ctk.CTkEntry(self.cuerpo, height=32, placeholder_text="XXXXXX-XXXX-XXXX")
+        self.ent_clave.pack(fill="x")
+
+        self.lbl_error = ctk.CTkLabel(self.cuerpo, text="", font=("Segoe UI", 12), text_color=ROJO, justify="left", wraplength=440)
+        self.lbl_error.pack(pady=(8, 0))
+
+        ctk.CTkButton(
+            self.cuerpo,
+            text="Canjear clave",
+            height=38,
+            font=("Segoe UI", 14, "bold"),
+            command=self._canjear,
+        ).pack(fill="x", pady=(10, 6))
+        ctk.CTkButton(self.cuerpo, text="Pagar con tarjeta (Mercado Pago)", height=34,
+                      fg_color="transparent", border_width=1, border_color=ACENTO,
+                      text_color=ACENTO, command=self._pagar).pack(fill="x", pady=(0, 4))
+        botones_fin = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
+        botones_fin.pack(fill="x", pady=(0, 4))
+        ctk.CTkButton(botones_fin, text="Ya pague, verificar", height=30,
+                      fg_color="transparent", border_width=1, border_color=BORDE,
+                      text_color=TEXTO, command=self._verificar_pago).pack(side="left", expand=True, fill="x", padx=(0, 6))
+        ctk.CTkButton(botones_fin, text="Cerrar sesion", height=30,
+                      fg_color="transparent", border_width=1, border_color=BORDE,
+                      text_color=ROJO, command=self._cerrar).pack(side="left", expand=True, fill="x", padx=(6, 0))
+        self.bind("<Return>", lambda e: self._canjear())
 
     def _elegir_logo(self):
         ruta = filedialog.askopenfilename(
@@ -193,21 +265,109 @@ class DialogoModoTecnico(ctk.CTkToplevel):
             self._logo = ruta
             self.lbl_logo.configure(text=os.path.basename(ruta))
 
-    def _activar(self):
-        nombre = self.ent_nombre.get().strip()
-        clave = self.ent_clave.get().strip()
+    def _ingresar(self):
+        email = self.ent_email.get().strip()
+        passw = self.ent_pass.get()
+        self.lbl_error.configure(text="Verificando...", text_color=TEXTO2)
+        self.update_idletasks()
         try:
-            nucleo.activar_tecnico(nombre, clave)
+            perfil = nucleo.iniciar_cuenta(email, passw)
         except Exception as e:
-            self.lbl_error.configure(text=str(e))
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
             return
         self.lbl_error.configure(text="", text_color=VERDE)
         self._renovar()
         self.master._actualizar_titulo()
-        self.lbl_error.configure(text="Licencia activada. Tus PDFs llevan tu marca.")
+        if perfil.get("vence"):
+            self.lbl_error.configure(text="Sesion iniciada. Tu suscripcion esta activa.")
+        else:
+            self.lbl_error.configure(text="Sesion iniciada. Ingresa tu clave de activacion.")
 
-    def _quitar(self):
-        nucleo.desactivar_tecnico()
+    def _registrar(self):
+        email = self.ent_email.get().strip()
+        passw = self.ent_pass.get()
+        nombre = self.ent_nombre.get().strip()
+        self.lbl_error.configure(text="Creando cuenta...", text_color=TEXTO2)
+        self.update_idletasks()
+        try:
+            perfil = nucleo.registrar_cuenta(email, passw, nombre)
+        except Exception as e:
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
+            return
+        if perfil:
+            self._renovar()
+            self.master._actualizar_titulo()
+            self.lbl_error.configure(
+                text="Cuenta creada. Paga o canjea tu clave de activacion para desbloquear el modo tecnico.",
+                text_color=VERDE,
+            )
+        else:
+            self.lbl_error.configure(text="", text_color=VERDE)
+            self.lbl_error.configure(
+                text="Cuenta creada. Te enviamos un email para verificar la cuenta. Confirmala y despues presiona Ingresar.",
+                text_color=VERDE,
+            )
+
+    def _reenviar(self):
+        email = self.ent_email.get().strip()
+        try:
+            nucleo.reenviar_verificacion(email)
+        except Exception as e:
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
+            return
+        self.lbl_error.configure(
+            text="Email de verificacion enviado. Revisa tu casilla (y el spam).", text_color=VERDE
+        )
+
+    def _canjear(self):
+        clave = self.ent_clave.get().strip()
+        self.lbl_error.configure(text="Activando suscripcion...", text_color=TEXTO2)
+        self.update_idletasks()
+        try:
+            perfil = nucleo.canjear_clave(clave)
+        except Exception as e:
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
+            return
+        self.lbl_error.configure(text="", text_color=VERDE)
+        self._renovar()
+        self.master._actualizar_titulo()
+        self.lbl_error.configure(text=f"Licencia activa hasta {perfil.get('vence')}. Tus PDFs llevan tu marca.", text_color=VERDE)
+
+    def _pagar(self):
+        self.lbl_error.configure(text="Preparando el pago...", text_color=TEXTO2)
+        self.update_idletasks()
+        try:
+            url = nucleo.url_pago()
+        except Exception as e:
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
+            return
+        import webbrowser
+
+        webbrowser.open(url)
+        self.lbl_error.configure(
+            text="Se abrio la pagina de Mercado Pago para pagar. Cuando termines, presiona 'Ya pague, verificar'.",
+            text_color=VERDE,
+        )
+
+    def _verificar_pago(self):
+        self.lbl_error.configure(text="Verificando el pago...", text_color=TEXTO2)
+        self.update_idletasks()
+        try:
+            nucleo.estado_pago()
+        except Exception as e:
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
+            return
+        if nucleo.tecnico_licenciado():
+            self._renovar()
+            self.master._actualizar_titulo()
+            self.lbl_error.configure(text="Pago confirmado. Modo tecnico activo.", text_color=VERDE)
+        else:
+            self.lbl_error.configure(
+                text="Todavia no se confirma el pago. Espera unos segundos y volve a intentar.", text_color=TEXTO2
+            )
+
+    def _cerrar(self):
+        nucleo.cerrar_cuenta()
         self.master._actualizar_titulo()
         self._renovar()
 
@@ -215,54 +375,47 @@ class DialogoModoTecnico(ctk.CTkToplevel):
         wa = self.ent_wa.get().strip()
         logo = getattr(self, "_logo", "")
         if not nucleo.tecnico_licenciado():
-            self.lbl_error.configure(text="La licencia ya no es valida.")
+            self.lbl_error.configure(text="La cuenta ya no es valida.")
             return
-        nucleo.guardar_tecnico(logo=logo or "", whatsapp=wa)
+        try:
+            nucleo.guardar_tecnico(logo=logo or "", whatsapp=wa)
+        except Exception as e:
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
+            return
         self.lbl_error.configure(text="", text_color=VERDE)
-        self.lbl_error.configure(text="Marca guardada. Los proximos PDFs la incluyen.")
+        self.lbl_error.configure(text="Marca guardada. Los proximos PDFs la incluyen.", text_color=VERDE)
         self.master._actualizar_titulo()
 
 
 class SelectorLista(ctk.CTkToplevel):
-    def __init__(self, master, titulo, opciones, activo=None, vacio="", crear_cmd=None):
+    def __init__(self, master, titulo, opciones, activo=None, vacio="", crear_cmd=None,
+                 eliminar_cmd=None, obtener_opciones=None, activo_cmd=None):
         super().__init__(master)
         self.al_elegir = None
+        self.eliminar_cmd = eliminar_cmd
+        self.obtener_opciones = obtener_opciones
+        self.activo_cmd = activo_cmd
+        self.opciones = opciones
+        self.activo = activo
+        self.vacio = vacio
+        self.crear_cmd = crear_cmd
         self.title(titulo)
         self.resizable(False, False)
         self.transient(master)
         self.configure(fg_color=FONDO)
         alto = min(500, max(240, 110 + len(opciones) * 46 + (48 if crear_cmd else 0)))
-        ancho = 420
+        ancho = 440
         centrar_dialogo(self, master, ancho, alto)
 
         ctk.CTkLabel(self, text=titulo, font=("Segoe UI", 15, "bold"), text_color=TEXTO).pack(padx=20, pady=(18, 10), anchor="w")
 
-        cuerpo = ctk.CTkFrame(self, fg_color="transparent")
-        cuerpo.pack(fill="both", expand=True, padx=16)
-
-        if not opciones:
-            ctk.CTkLabel(cuerpo, text=vacio, font=("Segoe UI", 13), text_color=TEXTO3, justify="left").pack(
-                anchor="w", padx=6, pady=(2, 8)
-            )
-        for texto, valor in opciones:
-            es_activo = valor == activo
-            btn = ctk.CTkButton(
-                cuerpo,
-                text=("\u2713 " if es_activo else "") + texto,
-                anchor="w",
-                height=40,
-                corner_radius=10,
-                font=("Segoe UI", 13, "bold" if es_activo else "normal"),
-                fg_color="#1d4ed8" if es_activo else CARD,
-                hover_color="#2563eb" if es_activo else BORDE,
-                text_color="#ffffff" if es_activo else TEXTO,
-                command=lambda v=valor: self._elegir(v),
-            )
-            btn.pack(fill="x", pady=4)
+        self.cuerpo = ctk.CTkFrame(self, fg_color="transparent")
+        self.cuerpo.pack(fill="both", expand=True, padx=16)
+        self._poblar()
 
         if crear_cmd:
             ctk.CTkButton(
-                cuerpo,
+                self,
                 text="+ Nuevo servicio",
                 height=36,
                 corner_radius=10,
@@ -271,7 +424,7 @@ class SelectorLista(ctk.CTkToplevel):
                 border_color=BORDE,
                 text_color=TEXTO,
                 command=lambda: self._crear(crear_cmd),
-            ).pack(fill="x", pady=(10, 4))
+            ).pack(fill="x", padx=16, pady=(10, 4))
 
         ctk.CTkButton(
             self, text="Cerrar", width=110, height=32, corner_radius=10, fg_color="transparent", border_width=1,
@@ -281,6 +434,76 @@ class SelectorLista(ctk.CTkToplevel):
         self.lift()
         self.focus()
         self.after(150, self.grab_set)
+
+    def _poblar(self):
+        for w in self.cuerpo.winfo_children():
+            w.destroy()
+        if not self.opciones:
+            ctk.CTkLabel(self.cuerpo, text=self.vacio, font=("Segoe UI", 13), text_color=TEXTO3, justify="left").pack(
+                anchor="w", padx=6, pady=(2, 8)
+            )
+        for texto, valor in self.opciones:
+            es_activo = valor == self.activo
+            if self.eliminar_cmd:
+                fila = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
+                fila.grid_columnconfigure(0, weight=1)
+                fila.pack(fill="x", pady=4)
+                btn = ctk.CTkButton(
+                    fila,
+                    text=("\u2713 " if es_activo else "") + texto,
+                    anchor="w",
+                    height=40,
+                    corner_radius=10,
+                    font=("Segoe UI", 13, "bold" if es_activo else "normal"),
+                    fg_color="#1d4ed8" if es_activo else CARD,
+                    hover_color="#2563eb" if es_activo else BORDE,
+                    text_color="#ffffff" if es_activo else TEXTO,
+                    command=lambda v=valor: self._elegir(v),
+                )
+                btn.grid(row=0, column=0, sticky="ew")
+                ctk.CTkButton(
+                    fila,
+                    text="\U0001F5D1",
+                    width=40,
+                    height=40,
+                    corner_radius=10,
+                    fg_color="transparent",
+                    border_width=1,
+                    border_color=BORDE,
+                    hover_color=CARD,
+                    text_color=ROJO,
+                    font=("Segoe UI Emoji", 13),
+                    command=lambda v=valor: self._eliminar(v),
+                ).grid(row=0, column=1, padx=(6, 0))
+            else:
+                btn = ctk.CTkButton(
+                    self.cuerpo,
+                    text=("\u2713 " if es_activo else "") + texto,
+                    anchor="w",
+                    height=40,
+                    corner_radius=10,
+                    font=("Segoe UI", 13, "bold" if es_activo else "normal"),
+                    fg_color="#1d4ed8" if es_activo else CARD,
+                    hover_color="#2563eb" if es_activo else BORDE,
+                    text_color="#ffffff" if es_activo else TEXTO,
+                    command=lambda v=valor: self._elegir(v),
+                )
+                btn.pack(fill="x", pady=4)
+
+    def _recargar(self):
+        self.opciones = self.obtener_opciones() if self.obtener_opciones else self.opciones
+        self.activo = self.activo_cmd() if self.activo_cmd else self.activo
+        self._poblar()
+
+    def _eliminar(self, valor):
+        if not messagebox.askyesno(
+            "Eliminar servicio",
+            f"Se eliminara PERMANENTEMENTE el servicio:\n\n{valor}\n\n"
+            "Incluye su historial de escaneos, revision fisica y reparaciones. Esta accion no se puede deshacer.\n\nEliminar?",
+        ):
+            return
+        if self.eliminar_cmd and self.eliminar_cmd(valor):
+            self._recargar()
 
     def _elegir(self, valor):
         cb = self.al_elegir
@@ -326,6 +549,7 @@ class App(ctk.CTk):
         lic = nucleo.tecnico_licenciado()
         sufijo = f" · Tecnico: {lic['nombre']}" if lic else ""
         self.title(f"OptiChek v{nucleo.VERSION}{sufijo}")
+        self._refrescar_permisos()
         if getattr(self, "pie_lat", None) is None:
             return
         for w in self.pie_lat.winfo_children():
@@ -338,6 +562,18 @@ class App(ctk.CTk):
             ctk.CTkLabel(
                 self.pie_lat, text="Activa tu licencia desde\nModo tecnico", font=("Segoe UI", 11), text_color=TEXTO2, justify="left"
             ).pack(anchor="w", pady=(2, 0))
+
+    def _refrescar_permisos(self):
+        if getattr(self, "btn_revision_fisica", None) is None:
+            return
+        lic = nucleo.tecnico_licenciado() is not None
+        for w in ([self.btn_revision_fisica, self.lbl_reparacion] + list(getattr(self, "btns_reparacion", []))):
+            if w is None:
+                continue
+            if lic:
+                w.pack(**w._pack_args)
+            else:
+                w.pack_forget()
 
     def _construir(self):
         barra_estado = ctk.CTkFrame(self, height=32, corner_radius=0, fg_color=PANEL)
@@ -454,7 +690,7 @@ class App(ctk.CTk):
             font=("Segoe UI", 12),
             command=self._iniciar_limpieza,
         ).pack(fill="x", pady=(8, 0))
-        ctk.CTkButton(
+        self.btn_revision_fisica = ctk.CTkButton(
             sec_acc,
             text="Revision fisica",
             height=34,
@@ -466,7 +702,35 @@ class App(ctk.CTk):
             hover_color=CARD,
             font=("Segoe UI", 12),
             command=self._abrir_revision_fisica,
-        ).pack(fill="x", pady=(8, 0))
+        )
+        self.btn_revision_fisica._pack_args = dict(fill="x", pady=(8, 0))
+        self.btn_revision_fisica.pack(**self.btn_revision_fisica._pack_args)
+        self.lbl_reparacion = ctk.CTkLabel(sec_acc, text="REPARACION", font=("Segoe UI", 11, "bold"), text_color=TEXTO3)
+        self.lbl_reparacion._pack_args = dict(anchor="w", pady=(14, 0))
+        self.lbl_reparacion.pack(**self.lbl_reparacion._pack_args)
+        self.btns_reparacion = []
+        for texto, accion, color in (
+            ("SFC (integridad)", "sfc", TEXTO2),
+            ("DISM (imagen del sistema)", "dism", TEXTO2),
+            ("Reset de red", "red", TEXTO2),
+        ):
+            btn_rep = ctk.CTkButton(
+                sec_acc,
+                text=texto,
+                height=30,
+                corner_radius=10,
+                fg_color="transparent",
+                border_width=1,
+                border_color=BORDE,
+                text_color=color,
+                hover_color=CARD,
+                font=("Segoe UI", 11),
+                command=lambda a=accion, t=texto: self._reparar(a, t),
+            )
+            btn_rep._pack_args = dict(fill="x", pady=(6, 0))
+            btn_rep.pack(**btn_rep._pack_args)
+            self.btns_reparacion.append(btn_rep)
+        self._refrescar_permisos()
 
         lic = nucleo.tecnico_licenciado()
         self.pie_lat = ctk.CTkFrame(barra_lat, fg_color="transparent")
@@ -503,7 +767,7 @@ class App(ctk.CTk):
         )
         ctk.CTkLabel(
             card_scan,
-            text="Hardware, discos y SMART, RAM, CPU\nprogramas de inicio, temperaturas y\nbateria del equipo.\n\nGenera el PDF (simple para el cliente +\ntecnico completo) directamente en\nDescargas, sin abrir navegador.",
+            text="Hardware, discos y SMART, RAM, CPU,\nprogramas de inicio, temperaturas y\nbateria del equipo.\n\nGenera el PDF directamente en Descargas.",
             font=("Segoe UI", 12),
             text_color=TEXTO2,
             justify="left",
@@ -630,6 +894,10 @@ class App(ctk.CTk):
             [(f"{s['Id']}  ·  {s['Cliente']}", s["Id"]) for s in self.servicios],
             activo=self.servicio_activo,
             vacio="Todavia no hay servicios creados.",
+            crear_cmd=self._dialogo_nuevo_servicio,
+            eliminar_cmd=self._eliminar_servicio_selector,
+            obtener_opciones=lambda: [(f"{s['Id']}  ·  {s['Cliente']}", s["Id"]) for s in nucleo.listar_servicios()],
+            activo_cmd=lambda: self.servicio_activo,
         )
         sel.al_elegir = self._al_elegir_servicio
 
@@ -660,6 +928,19 @@ class App(ctk.CTk):
     def _servicio_creado(self, sid):
         self._refrescar_servicios()
         self._activar_servicio(sid)
+
+    def _eliminar_servicio_selector(self, sid):
+        if nucleo.eliminar_servicio(sid):
+            if self.servicio_activo == sid:
+                self.servicio_activo = None
+                cfg = nucleo.leer_config()
+                if cfg.get("ultimo_servicio") == sid:
+                    cfg["ultimo_servicio"] = ""
+                    nucleo.escribir_config(cfg)
+            self._estado(f"Servicio {sid} eliminado.", AMBAR)
+            self._refrescar_servicios()
+            return True
+        return False
 
     def _ui(self, fn):
         try:
@@ -937,6 +1218,9 @@ class App(ctk.CTk):
     def _abrir_revision_fisica(self):
         if self.ocupado:
             return
+        if not nucleo.tecnico_licenciado():
+            messagebox.showinfo("Modo tecnico", "La revision fisica es una opcion del modo tecnico licenciado.")
+            return
         if not self.servicio_activo:
             messagebox.showinfo("Sin servicio", "Primero crea un servicio para asociar la revision.")
             self._dialogo_nuevo_servicio()
@@ -981,6 +1265,55 @@ class App(ctk.CTk):
             dialogo, text="Guardar revision", height=36, fg_color=ACENTO, hover_color="#1d4ed8",
             text_color="#ffffff", font=("Segoe UI", 13, "bold"), command=_guardar,
         ).pack(fill="x", padx=20, pady=(0, 16))
+
+    def _reparar(self, accion, titulo):
+        if self.ocupado:
+            return
+        if not nucleo.tecnico_licenciado():
+            messagebox.showinfo("Modo tecnico", "La seccion de reparacion es del modo tecnico licenciado.")
+            return
+        if not self.servicio_activo:
+            messagebox.showinfo("Sin servicio", "Primero crea un servicio para registrar la reparacion.")
+            self._dialogo_nuevo_servicio()
+            return
+        if not nucleo.es_admin():
+            messagebox.showwarning("Permisos", f"{titulo} requiere permisos de administrador.")
+            return
+        if not messagebox.askyesno(
+            titulo,
+            f"Se ejecutara {titulo}.\nPuede tardar varios minutos y el equipo podria pedir un reinicio.\n\nContinuar?",
+        ):
+            return
+        self._set_ocupado(True)
+        self._estado(f"Ejecutando {titulo}...", AMBAR)
+        self.barra.set(0)
+        self.lbl_progreso.configure(text=f"{titulo}: iniciando...")
+
+        def _cb_pct(pct):
+            self._ui(lambda: (self.barra.set(pct / 100.0),
+                              self.lbl_progreso.configure(text=f"{titulo}: {pct}%")))
+
+        threading.Thread(target=self._hilo_reparar, args=(accion, titulo, _cb_pct), daemon=True).start()
+
+    def _hilo_reparar(self, accion, titulo, cb_pct):
+        try:
+            res = nucleo.reparar(accion, progreso=cb_pct) or {}
+            ok = bool(res.get("Ok"))
+            detalle = (res.get("Detalle") or res.get("Salida") or "Finalizado.")
+            lineas = [l for l in detalle.splitlines() if l.strip()][-4:]
+            msg = f"{titulo}: " + ("OK" if ok else "FALLO")
+            if lineas:
+                msg += " :: " + " | ".join(lineas)[:400]
+            try:
+                if self.servicio_activo:
+                    nucleo.registrar_reparacion(self.servicio_activo, titulo, ok, " | ".join(lineas)[:300])
+            except Exception:
+                pass
+            self._terminar(ok, msg)
+        except Exception as e:
+            self._terminar(False, f"Error en {titulo}: {e}")
+        finally:
+            self._ui(lambda: (self.barra.set(0), self.lbl_progreso.configure(text="")))
 
     def comparar(self):
         if self.ocupado or len(self.historial) < 2:

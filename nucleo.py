@@ -16,7 +16,9 @@ import http.server
 import socketserver
 import subprocess
 import unicodedata
-from datetime import datetime
+import time
+import requests
+from datetime import datetime, timedelta
 
 try:
     import psutil
@@ -43,7 +45,7 @@ def contexto_com():
                 pass
 
 
-VERSION = "3.20"
+VERSION = "3.22"
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35
@@ -120,51 +122,375 @@ def _clave_tecnico_esperada(nombre):
 
 
 def generar_clave_tecnico(nombre):
-    k = _clave_tecnico_esperada(nombre)
-    return f"{k[:4]}-{k[4:8]}-{k[8:12]}"
+    """
+    Clave de activacion para la version con cuenta (Supabase).
+    El creador la inserta en la tabla claves_activacion con generar_clave.py;
+    aqui se genera un valor aleatorio con el mismo formato XXXXXX-XXXX-XXXX.
+    """
+    d = hashlib.sha256(os.urandom(16)).hexdigest().upper()
+    return f"{d[:6]}-{d[6:10]}-{d[10:14]}"
 
 
-def clave_tecnico_valida(nombre, clave):
-    k = (clave or "").replace("-", "").replace(" ", "").upper()
-    return bool(_norm_tecnico(nombre)) and k == _clave_tecnico_esperada(nombre)
+def _parse_fecha(s):
+    t = str(s or "").strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(t, fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
-def activar_tecnico(nombre, clave):
-    if not _norm_tecnico(nombre):
+SUPABASE_URL = "https://zvalnpvidqxrcqdpdmfh.supabase.co"
+SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2YWxucHZpZHF4cmNxZHBkbWZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgwOTk4MjMsImV4cCI6MjEwMzY3NTgyM30.0BqoZGbkfyDB5zT93rtU-ZFjhyOU7WXXCMuXzTr5ATQ"
+VALIDAR_CADA_SEG = 300
+_CUENTA_CLAVES = (
+    "email",
+    "nombre",
+    "logo",
+    "whatsapp",
+    "color",
+    "vence",
+    "session_id",
+    "last_net",
+    "tokens",
+    "tecnico_id",
+)
+
+
+def _estado_cuenta():
+    cfg = leer_config()
+    return {
+        "email": (cfg.get("cuenta_email") or "").strip(),
+        "nombre": (cfg.get("cuenta_nombre") or "").strip(),
+        "logo": (cfg.get("cuenta_logo") or "").strip(),
+        "whatsapp": (cfg.get("cuenta_whatsapp") or "").strip(),
+        "color": (cfg.get("cuenta_color") or "#2563eb").strip(),
+        "vence": _parse_fecha(cfg.get("cuenta_vence")),
+        "session_id": (cfg.get("cuenta_session_id") or "").strip(),
+        "tokens": cfg.get("cuenta_tokens") or {},
+        "last_net": cfg.get("cuenta_last_net") or 0,
+        "tecnico_id": (cfg.get("cuenta_tecnico_id") or "").strip(),
+    }
+
+
+def _guardar_cuenta(actualizar):
+    cfg = leer_config()
+    for k, v in actualizar.items():
+        key = "cuenta_" + k
+        if v is None:
+            cfg.pop(key, None)
+        else:
+            cfg[key] = v
+    escribir_config(cfg)
+
+
+def _sb_error(resp):
+    try:
+        datos = resp.json()
+    except Exception:
+        datos = {}
+    codigo = str(datos.get("code") or "").upper()
+    msg = str(datos.get("message") or "").lower()
+    err = str(datos.get("error_code") or "").lower()
+    if "email_not_confirmed" in codigo.lower() or "email_not_confirmed" in err or "not confirmed" in msg:
+        return "Tu email todavia no esta confirmado. Revisa tu casilla (y el spam) y volve a ingresar o reenvia la verificacion."
+    if codigo == "CLAVE_INVALIDA_O_USADA":
+        return "La clave de activacion no existe o ya fue usada."
+    if codigo == "NO_AUTENTICADO":
+        return "Sesion no valida. Volve a iniciar sesion."
+    if resp.status_code == 401:
+        return "Email o contrasena incorrectos, o cuenta sin confirmar."
+    if resp.status_code == 422 and datos.get("message"):
+        return str(datos["message"])
+    msj = datos.get("error_description") or datos.get("message") or datos.get("msg") or datos.get("error")
+    if msj:
+        return str(msj)
+    return "Error del servidor OptiChek (HTTP " + str(resp.status_code) + ")."
+
+
+def _sb_json(method, ruta, token, cuerpo=None, params=None, timeout=20):
+    headers = {"apikey": SUPABASE_ANON, "Authorization": "Bearer " + (token or SUPABASE_ANON)}
+    if cuerpo is not None:
+        headers["Content-Type"] = "application/json"
+    try:
+        resp = requests.request(method, SUPABASE_URL + ruta, headers=headers, json=cuerpo, params=params, timeout=timeout)
+    except requests.RequestException:
+        raise ValueError("Sin conexion con el servidor de OptiChek. Revisa tu internet.")
+    if resp.status_code >= 400:
+        raise ValueError(_sb_error(resp))
+    if not resp.content:
+        return {}
+    try:
+        return resp.json()
+    except Exception:
+        return {}
+
+
+def _sb_perfil(access, timeout=12):
+    tec = _sb_json(
+        "GET",
+        "/rest/v1/tecnicos",
+        access,
+        params={"select": "id,nombre,whatsapp,logo_url,color", "limit": "1"},
+        timeout=timeout,
+    )
+    fila_tec = {}
+    if isinstance(tec, list) and tec:
+        fila_tec = tec[0]
+    sus = _sb_json(
+        "GET",
+        "/rest/v1/suscripciones",
+        access,
+        params={"select": "vence,estado", "order": "vence.desc", "limit": "1"},
+        timeout=timeout,
+    )
+    fila_sus = {}
+    if isinstance(sus, list) and sus:
+        fila_sus = sus[0]
+    return {
+        "tecnico_id": str(fila_tec.get("id") or ""),
+        "nombre": str(fila_tec.get("nombre") or "Tecnico").strip(),
+        "whatsapp": str(fila_tec.get("whatsapp") or "").strip(),
+        "logo": str(fila_tec.get("logo_url") or "").strip(),
+        "color": str(fila_tec.get("color") or "#2563eb").strip(),
+        "vence": str(fila_sus.get("vence") or "").strip(),
+    }
+
+
+def _sb_accesible(access):
+    try:
+        r = requests.get(
+            SUPABASE_URL + "/auth/v1/user",
+            headers={"apikey": SUPABASE_ANON, "Authorization": "Bearer " + access},
+            timeout=10,
+        )
+        return r.status_code == 200
+    except requests.RequestException:
+        raise ValueError("Sin conexion con el servidor de OptiChek. Revisa tu internet.")
+
+
+def _sb_refrescar(access, refresh):
+    if not refresh:
+        raise ValueError("No hay sesion reutilizable. Volve a iniciar sesion.")
+    resp = _sb_json(
+        "POST",
+        "/auth/v1/token",
+        None,
+        cuerpo={"refresh_token": refresh},
+        params={"grant_type": "refresh_token"},
+    )
+    tokens = {"access": resp["access_token"], "refresh": resp["refresh_token"]}
+    _guardar_cuenta({"tokens": tokens})
+    return tokens["access"]
+
+
+def _sb_access_valido():
+    est = _estado_cuenta()
+    if not est["tokens"].get("access"):
+        raise ValueError("No hay sesion iniciada.")
+    if _sb_accesible(est["tokens"]["access"]):
+        return est["tokens"]["access"]
+    return _sb_refrescar(est["tokens"]["access"], est["tokens"].get("refresh"))
+
+
+def _nueva_sesion():
+    return hashlib.sha256(os.urandom(16)).hexdigest()
+
+
+def _guardar_perfil_local(perfil):
+    _guardar_cuenta(
+        {
+            "tecnico_id": perfil["tecnico_id"],
+            "nombre": perfil["nombre"],
+            "whatsapp": perfil["whatsapp"],
+            "logo": perfil["logo"],
+            "color": perfil["color"],
+            "vence": perfil["vence"],
+        }
+    )
+
+
+def _validar_cuenta_silencioso():
+    """Sincroniza con el servidor sin cortar la sesion local.
+    True: sigue valida; False: sesion revocada/otra; None: sin red (se usa cache)."""
+    est = _estado_cuenta()
+    if not est["tokens"].get("access"):
+        return True
+    try:
+        access = _sb_access_valido()
+    except ValueError:
+        return True
+    try:
+        r = _sb_json(
+            "POST",
+            "/rest/v1/rpc/verificar_sesion",
+            access,
+            cuerpo={"p_session_id": est["session_id"]},
+            timeout=12,
+        )
+        if not r.get("activa"):
+            return False
+        perfil = _sb_perfil(access)
+        _guardar_cuenta({"last_net": time.time()})
+        _guardar_perfil_local(perfil)
+        return True
+    except ValueError:
+        return None
+
+
+def _establecer_sesion(email, resp):
+    tokens = {"access": resp["access_token"], "refresh": resp["refresh_token"]}
+    sesion = _nueva_sesion()
+    perfil = _sb_perfil(tokens["access"])
+    _guardar_cuenta({"email": email, "session_id": sesion, "tokens": tokens, "last_net": time.time()})
+    _guardar_perfil_local(perfil)
+    try:
+        _sb_json(
+            "POST",
+            "/rest/v1/rpc/iniciar_sesion",
+            tokens["access"],
+            cuerpo={"p_session_id": sesion},
+            timeout=12,
+        )
+    except ValueError:
+        pass
+    return perfil
+
+
+def iniciar_cuenta(email, passw):
+    email = (email or "").strip().lower()
+    if not email or not passw:
+        raise ValueError("Email y contrasena son obligatorios.")
+    resp = _sb_json(
+        "POST",
+        "/auth/v1/token",
+        None,
+        cuerpo={"email": email, "password": passw},
+        params={"grant_type": "password"},
+    )
+    return _establecer_sesion(email, resp)
+
+
+def registrar_cuenta(email, passw, nombre):
+    email = (email or "").strip().lower()
+    nombre = (nombre or "").strip()
+    if not email or "@" not in email or "." not in email:
+        raise ValueError("Ingresa un email valido.")
+    if not nombre:
         raise ValueError("El nombre del tecnico es obligatorio.")
-    if not clave_tecnico_valida(nombre, clave):
-        raise ValueError("Clave de licencia invalida para ese nombre.")
-    cfg = leer_config()
-    cfg["tecnico_nombre"] = (nombre or "").strip()
-    cfg["tecnico_clave"] = (clave or "").strip().upper()
-    escribir_config(cfg)
+    if len(passw or "") < 6:
+        raise ValueError("La contrasena debe tener al menos 6 caracteres.")
+    resp = _sb_json(
+        "POST",
+        "/auth/v1/signup",
+        None,
+        cuerpo={"email": email, "password": passw, "data": {"nombre": nombre}},
+        timeout=25,
+    )
+    if resp.get("access_token"):
+        return _establecer_sesion(email, resp)
+    return None
 
 
-def desactivar_tecnico():
-    cfg = leer_config()
-    for k in ("tecnico_nombre", "tecnico_clave", "tecnico_logo", "tecnico_whatsapp"):
-        cfg.pop(k, None)
-    escribir_config(cfg)
+def reenviar_verificacion(email):
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        raise ValueError("Ingresa tu email.")
+    _sb_json(
+        "POST",
+        "/auth/v1/resend",
+        None,
+        cuerpo={"type": "signup", "email": email},
+        timeout=25,
+    )
+
+
+def canjear_clave(clave):
+    clave = (clave or "").strip()
+    if not clave:
+        raise ValueError("Ingresa la clave de activacion.")
+    access = _sb_access_valido()
+    _sb_json(
+        "POST",
+        "/rest/v1/rpc/canjear_clave",
+        access,
+        cuerpo={"p_clave": clave},
+        timeout=15,
+    )
+    perfil = _sb_perfil(access)
+    _guardar_cuenta({"last_net": time.time()})
+    _guardar_perfil_local(perfil)
+    return perfil
 
 
 def guardar_tecnico(logo="", whatsapp=""):
+    est = _estado_cuenta()
+    if not est["email"]:
+        raise ValueError("No hay sesion iniciada.")
+    if not est["tecnico_id"]:
+        est = _estado_cuenta()
+    access = _sb_access_valido()
+    _sb_json(
+        "PATCH",
+        "/rest/v1/tecnicos",
+        access,
+        cuerpo={"whatsapp": (whatsapp or "").strip(), "logo_url": (logo or "").strip()},
+        params={"id": "eq." + est["tecnico_id"]},
+        timeout=12,
+    )
+    _guardar_cuenta({"last_net": time.time(), "logo": logo, "whatsapp": whatsapp})
+
+
+def url_pago():
+    """Crea el pago en Mercado Pago (via Edge Function) y devuelve la URL de pago."""
+    acceso = _sb_access_valido()
+    resp = _sb_json("POST", "/functions/v1/checkout/user", acceso, cuerpo={}, timeout=35)
+    url = resp.get("init_point")
+    if not url:
+        raise ValueError("No se pudo preparar el pago (¿pago no configurado?).")
+    return url
+
+
+def estado_pago():
+    """Consulta el vence actual contra el servidor y refresca el cache local."""
+    acceso = _sb_access_valido()
+    resp = _sb_json("GET", "/functions/v1/checkout/estado", acceso, timeout=25)
+    vence = _parse_fecha(resp.get("vence") or "")
+    if vence:
+        _guardar_cuenta({"vence": resp.get("vence"), "last_net": time.time()})
+    return resp
+
+
+def cerrar_cuenta():
     cfg = leer_config()
-    cfg["tecnico_logo"] = (logo or "").strip()
-    cfg["tecnico_whatsapp"] = (whatsapp or "").strip()
+    for k in _CUENTA_CLAVES:
+        cfg.pop("cuenta_" + k, None)
     escribir_config(cfg)
 
 
 def tecnico_licenciado():
-    cfg = leer_config()
-    nombre = (cfg.get("tecnico_nombre") or "").strip()
-    clave = (cfg.get("tecnico_clave") or "").strip()
-    if not nombre or not clave or not clave_tecnico_valida(nombre, clave):
+    est = _estado_cuenta()
+    if not est["email"] or not est["vence"] or est["vence"] < datetime.now().date():
         return None
+    if time.time() - est["last_net"] > VALIDAR_CADA_SEG:
+        ok = _validar_cuenta_silencioso()
+        if ok is False:
+            return None
+        est = _estado_cuenta()
     return {
-        "nombre": nombre,
-        "logo": (cfg.get("tecnico_logo") or "").strip(),
-        "whatsapp": (cfg.get("tecnico_whatsapp") or "").strip(),
+        "nombre": est["nombre"] or "Tecnico",
+        "logo": est["logo"],
+        "whatsapp": est["whatsapp"],
+        "vence": est["vence"].strftime("%d/%m/%Y"),
     }
+
+
+def tecnico_vencido():
+    est = _estado_cuenta()
+    if not est["email"] or not est["vence"] or est["vence"] >= datetime.now().date():
+        return None
+    return {"nombre": est["nombre"] or "Tecnico", "vence": est["vence"].strftime("%d/%m/%Y")}
 
 
 def escribir_config(cfg):
@@ -284,6 +610,50 @@ def eliminar_escaneo(sid, num):
         return True
     except (OSError, IOError, ValueError):
         return False
+
+
+def eliminar_servicio(sid):
+    if not re.match(r"^SRV-\d{8}-\d{3}$", sid or ""):
+        return False
+    raiz = os.path.abspath(dir_raiz_servicios())
+    carpeta = os.path.abspath(os.path.join(dir_raiz_servicios(), sid))
+    if not carpeta.startswith(raiz):
+        return False
+    if not os.path.isdir(carpeta):
+        return False
+    try:
+        shutil.rmtree(carpeta)
+        return True
+    except OSError:
+        return False
+
+
+def _ruta_reparaciones(sid):
+    return os.path.join(dir_raiz_servicios(), sid or "", "reparaciones.json")
+
+
+def registrar_reparacion(sid, accion, ok, detalle=""):
+    if not sid or not re.match(r"^SRV-\d{8}-\d{3}$", sid or ""):
+        raise ValueError("Servicio invalido.")
+    datos = {"Reparaciones": reparaciones_servicio(sid)}
+    datos["Reparaciones"].append({
+        "Fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "Accion": (accion or "").strip(),
+        "Ok": bool(ok),
+        "Detalle": (detalle or "").strip()[:300],
+    })
+    _guardar_json_atomico(_ruta_reparaciones(sid), datos)
+    return datos
+
+
+def reparaciones_servicio(sid):
+    try:
+        with open(_ruta_reparaciones(sid), "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        lista = d.get("Reparaciones", []) if isinstance(d, dict) else []
+        return lista if isinstance(lista, list) else []
+    except (IOError, json.JSONDecodeError, FileNotFoundError):
+        return []
 
 
 CHECKLIST_FISICA = [
@@ -1007,6 +1377,161 @@ def formato_tamano_mb(mb):
     return f"{fmt(mb, 1)} MB"
 
 
+def _decodificar_salida(b):
+    if not b:
+        return ""
+    if b"\x00" in b:
+        try:
+            return b.decode("utf-16-le")
+        except UnicodeDecodeError:
+            pass
+    for enc in ("utf-8", "cp850", "cp1252", "latin-1"):
+        try:
+            t = b.decode(enc)
+            if "\ufffd" not in t:
+                return t
+        except UnicodeDecodeError:
+            continue
+    return b.decode("utf-8", errors="replace")
+
+
+def _comando_sistema(args, timeout=3600):
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    cmd = " & { & " + " ".join("'" + a.replace("'", "''") + "'" for a in args) + " } 2>&1 | Out-String"
+    try:
+        res = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", cmd],
+            timeout=timeout, capture_output=True, text=False, creationflags=flags,
+        )
+        if res.stdout:
+            salida = _decodificar_salida(res.stdout)
+        elif res.stderr:
+            salida = _decodificar_salida(res.stderr)
+        else:
+            salida = ""
+        salida = "\n".join([l for l in salida.strip().splitlines() if l.strip()][-25:])
+        return {"Codigo": res.returncode, "Salida": salida[-4000:].strip()}
+    except subprocess.TimeoutExpired:
+        return {"Codigo": None, "Salida": "superado tiempo limite"}
+
+
+def _pct_actual(buffer):
+    if not buffer:
+        return None
+    try:
+        txt = _decodificar_salida(bytes(buffer))
+    except Exception:
+        return None
+    ms = re.findall(r"(\d+(?:[.,]\d+)?)\s*%", txt)
+    if not ms:
+        return None
+    v = float(ms[-1].replace(",", "."))
+    return max(1, min(100, int(round(v))))
+
+
+def _comando_directo(exe, args, timeout=3600, progreso=None):
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    inicio = time.time()
+    try:
+        proc = subprocess.Popen(
+            [exe] + list(args),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+    except FileNotFoundError:
+        return {"Codigo": None, "Salida": "comando no encontrado"}
+    buffer = bytearray()
+    ultimo_pct = None
+    try:
+        while True:
+            trozo = proc.stdout.read(65536)
+            if not trozo:
+                break
+            buffer.extend(trozo)
+            if progreso:
+                pct = _pct_actual(buffer)
+                if pct is not None and pct != ultimo_pct:
+                    ultimo_pct = pct
+                    progreso(pct)
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return {"Codigo": None, "Salida": "superado tiempo limite"}
+    salida = "\n".join([l for l in _decodificar_salida(bytes(buffer)).strip().splitlines() if l.strip()][-25:])
+    return {"Codigo": proc.returncode, "Salida": salida[-4000:].strip()}
+
+
+def _sist32(nombre):
+    return os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", nombre)
+
+
+def reparacion_sfc(progreso=None):
+    res = _comando_directo(_sist32("sfc.exe"), ["/scannow"], progreso=progreso)
+    b = " ".join((res.get("Salida") or "").lower().split())
+    if ("administrador" in b and "consola" in b) or ("administrator" in b and "console" in b):
+        detalle = "SFC requiere una sesion con permisos de administrador."
+        ok = False
+    elif "no encontr" in b and "infracci" in b or "did not find any integrity" in b or "no violations" in b:
+        detalle = "Verificacion completa: no se encontraron archivos protegidos danados."
+        ok = True
+    elif "repar" in b and "correctamente" in b or "successfully repaired" in b:
+        detalle = "SFC encontro archivos danados y los reparo."
+        ok = True
+    elif "no puede reparar" in b or "no se pudo reparar" in b or "unable to fix" in b or "cannot repair" in b or "could not repair" in b:
+        detalle = "SFC encontro archivos danados que no pudo reparar. Reintentar con DISM y luego SFC."
+        ok = False
+    else:
+        detalle = (res.get("Salida") or "Verificacion finalizada.")[-600:].strip()
+        ok = res.get("Codigo") in (0, 1, None)
+    return {"Ok": ok, "Detalle": detalle, "Codigo": res.get("Codigo")}
+
+
+def reparacion_dism(progreso=None):
+    res = _comando_directo(_sist32("Dism.exe"), ["/Online", "/Cleanup-Image", "/RestoreHealth"], progreso=progreso)
+    b = " ".join((res.get("Salida") or "").lower().split())
+    if "permisos elevados" in b or ("elevated" in b and "requir" in b):
+        detalle = "DISM requiere permisos de administrador."
+        ok = False
+    elif not res.get("Salida"):
+        ok = True
+        detalle = "DISM finalizo sin informacion adicional."
+    elif "restauraci" in b and "complet" in b or "restore operation completed" in b:
+        ok = True
+        detalle = "DISM restauro la imagen del sistema correctamente."
+    elif "no se detect\u00f3" in b and "da\u00f1" in b or "did not find" in b or "no signature" in b:
+        ok = True
+        detalle = "DISM no detecto danos en la imagen del sistema."
+    else:
+        ok = res.get("Codigo") in (0, None)
+        detalle = (res.get("Salida") or "Reparacion DISM finalizada.")[-600:].strip()
+    return {"Ok": ok, "Detalle": detalle, "Codigo": res.get("Codigo")}
+
+
+def reset_red():
+    script = (
+        "$m = @()\n"
+        "try { netsh winsock reset | Out-Null; $m += 'winsock reset OK' } catch { $m += 'winsock: ' + $_.Exception.Message }\n"
+        "try { netsh int ip reset | Out-Null; $m += 'ip reset OK (requiere reinicio)' } catch { $m += 'ip: ' + $_.Exception.Message }\n"
+        "try { ipconfig /flushdns | Out-Null; $m += 'dns flush OK' } catch { $m += 'dns: ' + $_.Exception.Message }\n"
+        "$ok = -not ($m -match ': ')\n"
+        "[pscustomobject]@{ Ok = $ok; Detalle = ($m -join ' | ') } | ConvertTo-Json -Compress"
+    )
+    res = _ejecutar_ps_json(script)
+    detalle = (res or {}).get("Detalle") or "Reset de red finalizado."
+    return {"Ok": bool((res or {}).get("Ok")), "Detalle": detalle, "Codigo": None}
+
+
+def reparar(accion, progreso=None):
+    if accion == "sfc":
+        return reparacion_sfc(progreso=progreso)
+    if accion == "dism":
+        return reparacion_dism(progreso=progreso)
+    if accion == "red":
+        return reset_red()
+    raise ValueError("Accion de reparacion desconocida.")
+
+
 def recomendaciones_comerciales(datos):
     rec = []
     for d in datos.get("Discos_Fisicos", []):
@@ -1555,6 +2080,25 @@ def _marca_tecnico_html():
     return f"<div class='marca'>{img}<span>{texto}</span></div>"
 
 
+def _pie_informe_html(nota_porcentajes=True):
+    ahora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    lic = tecnico_licenciado()
+    sufijo = "Los porcentajes son valores instantaneos tomados al momento del escaneo." if nota_porcentajes else ""
+    if lic:
+        marca = f"OptiChek v{VERSION} &middot; Modo tecnico activo"
+        if lic.get("nombre"):
+            marca += f" &mdash; {esc(lic['nombre'])}"
+        wa = (lic.get("whatsapp") or "").strip()
+        if wa:
+            marca += f" &middot; WhatsApp {esc(wa)}"
+        texto = f"Generado el {ahora} por {marca}"
+    else:
+        texto = f"Generado el {ahora} por OptiChek v{VERSION} &mdash; Version gratuita (el modo tecnico agrega tu logo, nombre y WhatsApp al informe)"
+    if sufijo:
+        texto += " &mdash; " + sufijo
+    return f"<p class='pie'>{texto}</p>"
+
+
 def _pagina(titulo, contenido, para_pdf=False):
     marca = "" if para_pdf else _marca_tecnico_html()
     botones = "" if para_pdf else "<button class='btn no-print btn-flotante' onclick=\"window.print()\">Guardar como PDF</button><p class='no-print aviso-pdf'>Informe generado por OptiChek. Guarda la version PDF desde la aplicacion (boton PDF del historial).</p>"
@@ -1834,12 +2378,35 @@ def generar_html_escaneo(datos, num, servicio=None, para_pdf=False):
             + "</div>"
         )
 
+    lista_reparaciones = (datos.get("Reparaciones") if isinstance(datos.get("Reparaciones"), list) else reparaciones_servicio(datos.get("Servicio") or (servicio or {}).get("Id")))
+    seccion_reparaciones = ""
+    if lista_reparaciones:
+        filas_rep = "".join(
+            f"<tr><td>{esc(r.get('Fecha', ''))}</td><td>{esc(r.get('Accion', ''))}</td>"
+            f"<td style='width:18%'>{pill('pill-ok' if r.get('Ok') else 'pill-mal', 'EXITO' if r.get('Ok') else 'FALLO')}</td></tr>"
+            for r in lista_reparaciones[-10:]
+        )
+        seccion_reparaciones = (
+            "<div class='seccion'><h2>Reparaciones realizadas</h2>"
+            "<table><thead><tr><th>Fecha</th><th>Accion</th><th style='width:18%'>Resultado</th></tr></thead>"
+            f"<tbody>{filas_rep}</tbody></table></div>"
+        )
+
     recs = recomendaciones_comerciales(datos)
+    items_rec = ""
     if recs:
         items_rec = "".join(f"<li>{dot_severidad(sev)}{esc(texto)}</li>" for sev, texto in recs)
         seccion_rec = f"<div class='seccion'><h2>Recomendaciones del tecnico</h2><ul class='lista-cliente'>{items_rec}</ul></div>"
     else:
         seccion_rec = ""
+
+    licenciado = tecnico_licenciado() is not None
+    if not licenciado:
+        seccion_checklist = ""
+        seccion_reparaciones = ""
+        seccion_limpieza = ""
+        seccion_seg = ""
+        seccion_nav = ""
 
     cabecera_tecnica = _cabecera(
         "INFORME TECNICO DE REVISION",
@@ -1852,24 +2419,30 @@ def generar_html_escaneo(datos, num, servicio=None, para_pdf=False):
     contenido_tecnico = (
         f"<div class='salto-pagina'></div>"
         + cabecera_tecnica
-        + f"<div class='seccion'><h2>Diagnostico automatico</h2>"
-        + f"<table><thead><tr><th>Severidad</th><th>Categoria</th><th>Hallazgo</th></tr></thead><tbody>{filas_diag}</tbody></table></div>"
-        + f"<div class='seccion'><h2>Metricas del sistema al momento del escaneo</h2>"
-        + f"<table><tbody>{filas_metricas}</tbody></table></div>"
-        + f"<div class='seccion'><h2>Resumen del hardware</h2>{_html_resumen_hardware(datos)}</div>"
-        + f"<div class='seccion'><h2>Almacenamiento, vida util y SMART</h2>"
-        + ("<table><thead><tr><th>Disco</th><th>Tipo</th><th>Interfaz</th><th>Capacidad</th><th>Vida restante</th><th>Encendido</th><th>SMART</th></tr></thead>"
-           f"<tbody>{filas_discos}</tbody></table><br>"
-           "<table><thead><tr><th>Unidad</th><th>Sistema de archivos</th><th>Total</th><th>Libre</th></tr></thead>"
-           f"<tbody>{filas_part}</tbody></table></div>")
-        + f"<div class='seccion'><h2>Programas al inicio ({len(datos['Inicio'])})</h2>{tabla_inicio}</div>"
+        + (f"<div class='seccion'><h2>Diagnostico automatico</h2>"
+           + f"<table><thead><tr><th>Severidad</th><th>Categoria</th><th>Hallazgo</th></tr></thead><tbody>{filas_diag}</tbody></table></div>"
+           + f"<div class='seccion'><h2>Metricas del sistema al momento del escaneo</h2>"
+           + f"<table><tbody>{filas_metricas}</tbody></table></div>"
+           + f"<div class='seccion'><h2>Resumen del hardware</h2>{_html_resumen_hardware(datos)}</div>"
+           + f"<div class='seccion'><h2>Almacenamiento, vida util y SMART</h2>"
+           + ("<table><thead><tr><th>Disco</th><th>Tipo</th><th>Interfaz</th><th>Capacidad</th><th>Vida restante</th><th>Encendido</th><th>SMART</th></tr></thead>"
+              f"<tbody>{filas_discos}</tbody></table><br>"
+              "<table><thead><tr><th>Unidad</th><th>Sistema de archivos</th><th>Total</th><th>Libre</th></tr></thead>"
+              f"<tbody>{filas_part}</tbody></table></div>")
+           + f"<div class='seccion'><h2>Programas al inicio ({len(datos['Inicio'])})</h2>{tabla_inicio}</div>"
+           if licenciado else
+           f"<div class='seccion'><h2>Detalle tecnico</h2>"
+           + "<p class='sin-cambios'>El informe completo (diagnostico automatico, metricas del sistema, hardware, almacenamiento y SMART, programas al inicio) esta incluido en la version para tecnicos.</p>")
         + seccion_checklist
+        + seccion_reparaciones
         + seccion_limpieza
         + seccion_seg
         + seccion_nav
         + seccion_rec
+        + ("" if licenciado else "<div class='seccion'><h2>Queres mas opciones?</h2>"
+           + "<p class='aviso'>Si queres mas opciones podes pagar la version para tecnicos. Te desbloquea el informe tecnico completo (diagnostico automatico, metricas del sistema, hardware, vida util y SMART de los discos, programas al inicio), la revision fisica guiada y las herramientas de reparacion (SFC, DISM y reset de red). Contacta al creador de OptiChek para activarla.</p></div>")
         + "<div class='firma'><div>Firma del tecnico</div><div>Firma del cliente</div></div>"
-        + f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION} &mdash; Los porcentajes son valores instantaneos tomados al momento del escaneo.</p>"
+        + _pie_informe_html(True)
     )
 
     titulo = f"Diagnostico #{num:03d} - {equipo}"
@@ -2139,7 +2712,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None, para_pdf=False):
                       f"<tbody>{filas_part}</tbody></table></div>")
 
     secciones += "<div class='firma'><div>Firma del tecnico</div><div>Firma del cliente</div></div>"
-    secciones += f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION}.</p>"
+    secciones += _pie_informe_html(False)
 
     return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones, para_pdf=para_pdf)
 
