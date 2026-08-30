@@ -5,11 +5,13 @@ import json
 import glob
 import html
 import hmac
+import base64
 import shutil
 import socket
 import hashlib
 import tempfile
 import threading
+import contextlib
 import http.server
 import socketserver
 import subprocess
@@ -23,10 +25,26 @@ except ImportError as e:
     raise RuntimeError(f"Falta una dependencia ({e.name}). Instala con: pip install psutil WMI")
 
 
-VERSION = "3.18"
+@contextlib.contextmanager
+def contexto_com():
+    pythoncom = None
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+    except Exception:
+        pythoncom = None
+    try:
+        yield
+    finally:
+        if pythoncom:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
+
+VERSION = "3.19"
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
-
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35
 UMBRAL_INICIO_ATENCION = 10
@@ -64,6 +82,24 @@ def recurso(nombre):
 
 def ruta_config():
     return os.path.join(base_dir(), "config.json")
+
+
+def _guardar_json_atomico(ruta, datos):
+    carpeta = os.path.dirname(ruta) or "."
+    os.makedirs(carpeta, exist_ok=True)
+    temporal = ruta + ".tmp"
+    try:
+        with open(temporal, "w", encoding="utf-8") as fh:
+            json.dump(datos, fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(temporal, ruta)
+    finally:
+        if os.path.exists(temporal):
+            try:
+                os.remove(temporal)
+            except OSError:
+                pass
 
 
 def leer_config():
@@ -132,11 +168,8 @@ def tecnico_licenciado():
 
 
 def escribir_config(cfg):
-    try:
-        with open(ruta_config(), "w", encoding="utf-8") as fh:
-            json.dump(cfg, fh, indent=4, ensure_ascii=False)
-    except Exception:
-        pass
+    _guardar_json_atomico(ruta_config(), cfg)
+
 
 
 def dir_raiz_servicios():
@@ -162,8 +195,7 @@ def crear_servicio(cliente, tecnico=""):
         "Tecnico": (tecnico or "").strip(),
         "Creado": ahora.strftime("%d/%m/%Y %H:%M"),
     }
-    with open(os.path.join(carpeta, "servicio.json"), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh, indent=4, ensure_ascii=False)
+    _guardar_json_atomico(os.path.join(carpeta, "servicio.json"), meta)
     cfg = leer_config()
     cfg["ultimo_servicio"] = sid
     cfg["ultimo_tecnico"] = meta["Tecnico"]
@@ -179,7 +211,7 @@ def cargar_servicio(sid):
         with open(arch, "r", encoding="utf-8") as fh:
             meta = json.load(fh)
         return meta if isinstance(meta, dict) else None
-    except Exception:
+    except (IOError, json.JSONDecodeError, FileNotFoundError):
         return None
 
 
@@ -201,11 +233,7 @@ def dir_escaneos(sid):
 
 def _guardar_meta_servicio(sid, meta):
     arch = os.path.join(dir_raiz_servicios(), sid, "servicio.json")
-    try:
-        with open(arch, "w", encoding="utf-8") as fh:
-            json.dump(meta, fh, indent=4, ensure_ascii=False)
-    except Exception:
-        pass
+    _guardar_json_atomico(arch, meta)
 
 
 def guardar_escaneo(datos, sid, nombre=""):
@@ -213,18 +241,19 @@ def guardar_escaneo(datos, sid, nombre=""):
     for f in glob.glob(os.path.join(dir_escaneos(sid), "escaneo_*.json")):
         m = re.search(r"escaneo_(\d+)_", os.path.basename(f))
         if m:
-            nums.append(int(m.group(1)))
-    meta = cargar_servicio(sid) or {}
-    ultimo_usado = int(meta.get("Ultimo_Num", 0)) if isinstance(meta, dict) else 0
+            try:
+                nums.append(int(m.group(1)))
+            except ValueError:
+                continue
     max_existente = max(nums) if nums else 0
-    num = max(ultimo_usado, max_existente) + 1
+    num = max_existente + 1
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archivo = os.path.join(dir_escaneos(sid), f"escaneo_{num:03d}_{stamp}.json")
     datos["Servicio"] = sid
     nombre = (nombre or "").strip()
     datos["Nombre"] = nombre if nombre else f"Escaneo #{num:03d}"
-    with open(archivo, "w", encoding="utf-8") as fh:
-        json.dump(datos, fh, indent=4, ensure_ascii=False)
+    _guardar_json_atomico(archivo, datos)
+    meta = cargar_servicio(sid) or {}
     if isinstance(meta, dict):
         meta["Ultimo_Num"] = num
         _guardar_meta_servicio(sid, meta)
@@ -235,18 +264,25 @@ def eliminar_escaneo(sid, num):
     objetivo = None
     for f in glob.glob(os.path.join(dir_escaneos(sid), "escaneo_*.json")):
         m = re.search(r"escaneo_(\d+)_", os.path.basename(f))
-        if m and int(m.group(1)) == num:
-            objetivo = f
-            break
+        if m:
+            try:
+                if int(m.group(1)) == num:
+                    objetivo = f
+                    break
+            except ValueError:
+                continue
     if not objetivo:
         return False
     raiz = os.path.abspath(dir_raiz_servicios())
-    if not os.path.abspath(objetivo).startswith(raiz):
-        return False
     try:
-        os.remove(objetivo)
+        objetivo_abs = os.path.abspath(objetivo)
+        if not objetivo_abs.startswith(raiz):
+            return False
+        if not os.path.isfile(objetivo_abs):
+            return False
+        os.remove(objetivo_abs)
         return True
-    except Exception:
+    except (OSError, IOError, ValueError):
         return False
 
 
@@ -265,7 +301,7 @@ def cargar_historial(sid):
                 datos = json.load(fh)
             if isinstance(datos, dict) and "Sistema" in datos:
                 items.append({"num": int(m.group(1)), "archivo": f, "datos": datos})
-        except Exception:
+        except (json.JSONDecodeError, IOError, ValueError) as e:
             continue
     items.sort(key=lambda x: x["num"])
     return items
@@ -294,7 +330,7 @@ def slug_equipo(nombre):
 
 
 def esc(s):
-    return html.escape(str(s))
+    return html.escape(str(s if s is not None else ""))
 
 
 def fmt(v, dec=1):
@@ -302,32 +338,94 @@ def fmt(v, dec=1):
         return "-"
     if isinstance(v, (int, float)):
         if isinstance(v, int) or dec == 0:
-            return str(v)
+            return str(round(v))
         return f"{v:.{dec}f}"
     return esc(v)
 
 
+def _logo_base64(ruta):
+    """Convierte la ruta de imagen del logo a un URI Base64 para incrustación directa en HTML."""
+    if not ruta or not os.path.exists(ruta):
+        return ""
+    try:
+        ext = os.path.splitext(ruta)[1].lower().lstrip(".")
+        mime = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext or 'png'}"
+        with open(ruta, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return ""
+
+
+def _obtener_tipos_disco():
+    """Consulta el namespace de Storage de Windows para detectar si las unidades son SSD, NVMe o HDD."""
+    tipos = {}
+    try:
+        cs = wmi.WMI(namespace="root\\microsoft\\windows\\storage")
+        for pd in getattr(cs, "MSFT_PhysicalDisk", lambda: [])():
+            dev_id = getattr(pd, "DeviceId", None)
+            media = getattr(pd, "MediaType", 0)  # 3: HDD, 4: SSD, 5: SCM
+            bus = getattr(pd, "BusType", 0)     # 17: NVMe
+            if media == 4:
+                tipo = "SSD NVMe" if bus == 17 else "SSD"
+            elif media == 3:
+                tipo = "HDD"
+            elif bus == 17:
+                tipo = "SSD NVMe"
+            else:
+                tipo = ""
+            nombre = (getattr(pd, "FriendlyName", "") or getattr(pd, "Model", "") or "").strip().lower()
+            if dev_id is not None and tipo:
+                tipos[str(dev_id)] = tipo
+            if nombre and tipo:
+                tipos[nombre] = tipo
+    except Exception:
+        pass
+    return tipos
+
+
+def _clasificar_tipo_disco(modelo, interfaz, tipos_storage, disk_index=None):
+    """Clasifica el tipo de almacenamiento con fallback a heurísticas de modelo e interfaz."""
+    if disk_index is not None and str(disk_index) in tipos_storage:
+        return tipos_storage[str(disk_index)]
+    mod_lower = (modelo or "").lower()
+    for k, v in tipos_storage.items():
+        if k and k in mod_lower and v:
+            return v
+    if "nvme" in mod_lower or "nvme" in (interfaz or "").lower():
+        return "SSD NVMe"
+    if any(k in mod_lower for k in ("ssd", "solid state", "kingston sa400", "crucial ct", "samsung 8", "samsung 9", "kioxia", "sandisk", "wd green", "wd blue sn", "wd black")):
+        return "SSD"
+    if any(k in mod_lower for k in ("wdc wd", "st1000", "st2000", "st500", "hitachi", "toshiba mq", "toshiba dt", "barracuda", "caviar")):
+        return "HDD"
+    return "Disco"
+
+
 def obtener_sistema(c):
-    so = c.Win32_OperatingSystem()[0]
-    cs = c.Win32_ComputerSystem()[0]
+    so_list = c.Win32_OperatingSystem()
+    cs_list = c.Win32_ComputerSystem()
+    so = so_list[0] if so_list else None
+    cs = cs_list[0] if cs_list else None
     return {
-        "Equipo": (cs.Name or socket.gethostname()).strip(),
+        "Equipo": ((cs.Name if cs else None) or socket.gethostname()).strip(),
         "Usuario": os.environ.get("USERNAME", ""),
-        "Windows": so.Caption.strip(),
-        "Arquitectura": so.OSArchitecture,
-        "Build": so.BuildNumber,
-        "Fabricante": (cs.Manufacturer or "").strip(),
-        "Modelo": (cs.Model or "").strip(),
+        "Windows": (getattr(so, "Caption", "") or "Windows").strip(),
+        "Arquitectura": (getattr(so, "OSArchitecture", "") or ""),
+        "Build": (getattr(so, "BuildNumber", "") or ""),
+        "Fabricante": (getattr(cs, "Manufacturer", "") or "").strip() if cs else "",
+        "Modelo": (getattr(cs, "Model", "") or "").strip() if cs else "",
     }
 
 
 def obtener_cpu(c):
-    p = c.Win32_Processor()[0]
+    p_list = c.Win32_Processor()
+    p = p_list[0] if p_list else None
+    ghz = round(p.MaxClockSpeed / 1000.0, 2) if (p and getattr(p, "MaxClockSpeed", None)) else 0.0
     return {
-        "Modelo": p.Name.strip(),
-        "Nucleos": p.NumberOfCores,
-        "Hilos": p.NumberOfLogicalProcessors,
-        "GHz": round(p.MaxClockSpeed / 1000.0, 2),
+        "Modelo": (getattr(p, "Name", "") or "Procesador").strip(),
+        "Nucleos": getattr(p, "NumberOfCores", None) or os.cpu_count() or 1,
+        "Hilos": getattr(p, "NumberOfLogicalProcessors", None) or os.cpu_count() or 1,
+        "GHz": ghz,
         "Carga_Pct": psutil.cpu_percent(interval=0.8),
     }
 
@@ -336,12 +434,18 @@ def obtener_ram(c):
     vm = psutil.virtual_memory()
     sw = psutil.swap_memory()
     modulos = []
-    for m in c.Win32_PhysicalMemory():
-        try:
-            gb = round(int(m.Capacity) / 1024 ** 3, 1)
-        except Exception:
-            gb = 0
-        modulos.append(f"{gb} GB - {m.Speed} MHz - {(m.Manufacturer or '').strip()}")
+    try:
+        for m in c.Win32_PhysicalMemory():
+            try:
+                gb = round(int(m.Capacity) / 1024 ** 3, 1)
+            except Exception:
+                gb = 0
+            vel = getattr(m, "Speed", "") or ""
+            vel_txt = f"{vel} MHz - " if vel else ""
+            fab = (getattr(m, "Manufacturer", "") or "").strip()
+            modulos.append(f"{gb} GB - {vel_txt}{fab}".rstrip(" -"))
+    except Exception:
+        pass
     return {
         "Total_GB": round(vm.total / 1024 ** 3, 2),
         "En_Uso_Pct": vm.percent,
@@ -353,16 +457,22 @@ def obtener_ram(c):
 
 def obtener_discos(c):
     discos = []
+    tipos_storage = _obtener_tipos_disco()
     for d in c.Win32_DiskDrive():
         try:
             gb = round(int(d.Size) / 1024 ** 3)
         except Exception:
             gb = 0
+        modelo = (getattr(d, "Model", "") or "").strip()
+        interfaz = (getattr(d, "InterfaceType", "") or "").strip()
+        idx = getattr(d, "Index", None)
+        tipo = _clasificar_tipo_disco(modelo, interfaz, tipos_storage, idx)
         discos.append({
-            "Modelo": (d.Model or "").strip(),
-            "Interfaz": d.InterfaceType or "",
+            "Modelo": modelo,
+            "Tipo": tipo,
+            "Interfaz": interfaz,
             "Tamano_GB": gb,
-            "SMART": (d.Status or "").strip(),
+            "SMART": (getattr(d, "Status", "") or "").strip(),
         })
     return discos
 
@@ -406,7 +516,7 @@ def agregar_smart_detallado(discos):
 def obtener_particiones():
     parts = []
     for p in psutil.disk_partitions(all=False):
-        if "cdrom" in p.opts.lower():
+        if not p.fstype or "cdrom" in p.opts.lower():
             continue
         try:
             u = psutil.disk_usage(p.mountpoint)
@@ -423,30 +533,64 @@ def obtener_particiones():
     return parts
 
 
+def _origen_inicio(ubicacion):
+    limpio = (ubicacion or "").strip()
+    if limpio in ("Inicio (global)", "Inicio (usuario)", "Registro (global)", "Registro (usuario)", "Otro", "Desconocido"):
+        return limpio
+    u = limpio.lower().replace("\\", "/")
+    if "startup" in u:
+        return "Inicio (global)" if ("/common" in u or "/programdata" in u) else "Inicio (usuario)"
+    if u.startswith("hklm") or "hkey_local_machine" in u:
+        return "Registro (global)"
+    if u.startswith("hku") or u.startswith("hkcu") or "hkey_users" in u or "hkey_current_user" in u or "s-1-5-" in u:
+        return "Registro (usuario)"
+    return "Otro" if u else "Desconocido"
+
+
+def _inicio_limpio(lista):
+    unicos = {}
+    for p in lista or []:
+        nombre = (p.get("Nombre") or "").strip() or "(sin nombre)"
+        if nombre.lower() not in unicos:
+            unicos[nombre.lower()] = {"Nombre": nombre, "Comando": (p.get("Comando") or "").strip(), "Origenes": []}
+        origen = _origen_inicio(p.get("Ubicacion"))
+        if origen not in unicos[nombre.lower()]["Origenes"]:
+            unicos[nombre.lower()]["Origenes"].append(origen)
+    limpios = [{
+        "Nombre": d["Nombre"],
+        "Comando": d["Comando"],
+        "Ubicacion": " | ".join(d["Origenes"]) or "Desconocido",
+    } for d in unicos.values()]
+    return sorted(limpios, key=lambda p: p["Nombre"].lower())
+
+
 def obtener_programas_inicio(c):
     progs = []
-    for item in c.Win32_StartupCommand():
-        progs.append({
-            "Nombre": (item.Name or "").strip(),
-            "Comando": (item.Command or "").strip(),
-            "Ubicacion": (item.Location or "").strip(),
-        })
-    return sorted(progs, key=lambda p: p["Nombre"].lower())
+    try:
+        for item in c.Win32_StartupCommand():
+            progs.append({
+                "Nombre": (getattr(item, "Name", "") or "").strip(),
+                "Comando": (getattr(item, "Command", "") or "").strip(),
+                "Ubicacion": (getattr(item, "Location", "") or "").strip(),
+            })
+    except Exception:
+        pass
+    return _inicio_limpio(progs)
 
 
 def temperaturas_lhm():
     temps = []
     try:
         cw = wmi.WMI(namespace="root\\LibreHardwareMonitor")
-        for s in cw.LHM_Sensor():
-            if (s.SensorType or "") != "Temperature":
+        for s in getattr(cw, "LHM_Sensor", lambda: [])():
+            if (getattr(s, "SensorType", "") or "") != "Temperature":
                 continue
             try:
                 val = float(s.Value)
             except Exception:
                 continue
             if -50 < val < 150:
-                temps.append({"Zona": (s.Name or "Sensor"), "Celsius": round(val, 1), "Fuente": "LibreHardwareMonitor"})
+                temps.append({"Zona": (getattr(s, "Name", "") or "Sensor"), "Celsius": round(val, 1), "Fuente": "LibreHardwareMonitor"})
     except Exception:
         pass
     return temps
@@ -456,11 +600,11 @@ def temperaturas_acpi():
     temps = []
     try:
         cw = wmi.WMI(namespace="root\\WMI")
-        for s in cw.MSAcpi_ThermalZoneTemperature():
+        for s in getattr(cw, "MSAcpi_ThermalZoneTemperature", lambda: [])():
             try:
                 cel = round(s.CurrentTemperature / 10.0 - 273.15, 1)
                 if -50 < cel < 150:
-                    zona = (s.InstanceName or "Zona termica").split("\\")[-1]
+                    zona = (getattr(s, "InstanceName", "") or "Zona termica").split("\\")[-1]
                     temps.append({"Zona": zona, "Celsius": cel, "Fuente": "ACPI"})
             except Exception:
                 continue
@@ -481,23 +625,32 @@ def obtener_temperaturas():
 
 def obtener_gpu(c):
     gpus = []
-    for g in c.Win32_VideoController():
-        gpus.append((g.Name or "").strip())
-    return [g for g in gpus if g]
+    try:
+        for g in c.Win32_VideoController():
+            nombre = (getattr(g, "Name", "") or "").strip()
+            if nombre:
+                gpus.append(nombre)
+    except Exception:
+        pass
+    return gpus
 
 
 def obtener_placa(c):
-    b = c.Win32_BaseBoard()[0]
-    bios = c.Win32_BIOS()[0]
+    b_list = c.Win32_BaseBoard()
+    bios_list = c.Win32_BIOS()
+    b = b_list[0] if b_list else None
+    bios = bios_list[0] if bios_list else None
     fecha_bios = ""
     try:
-        if bios.ReleaseDate:
-            fecha_bios = datetime.strptime(bios.ReleaseDate.split(".")[0], "%Y%m%d%H%M%S").strftime("%d/%m/%Y")
+        rel = getattr(bios, "ReleaseDate", None)
+        if rel:
+            fecha_bios = datetime.strptime(rel.split(".")[0], "%Y%m%d%H%M%S").strftime("%d/%m/%Y")
     except Exception:
         pass
+    placa_txt = f"{getattr(b, 'Manufacturer', '') or ''} {getattr(b, 'Product', '') or ''}".strip() or "Generica"
     return {
-        "Placa": f"{(b.Manufacturer or '').strip()} {(b.Product or '').strip()}".strip(),
-        "BIOS": (bios.SMBIOSBIOSVersion or "").strip(),
+        "Placa": placa_txt,
+        "BIOS": (getattr(bios, "SMBIOSBIOSVersion", "") or "").strip(),
         "Fecha_BIOS": fecha_bios,
     }
 
@@ -505,8 +658,8 @@ def obtener_placa(c):
 def obtener_bateria():
     try:
         cw = wmi.WMI(namespace="root\\WMI")
-        dis = cw.BatteryStaticData()
-        full = cw.BatteryFullChargedCapacity()
+        dis = getattr(cw, "BatteryStaticData", lambda: [])()
+        full = getattr(cw, "BatteryFullChargedCapacity", lambda: [])()
         if dis and full:
             diseno = int(dis[0].DesignedCapacity)
             actual = int(full[0].FullChargedCapacity)
@@ -516,6 +669,354 @@ def obtener_bateria():
     except Exception:
         pass
     return None
+
+
+def _ejecutar_ps_json(script, timeout=45):
+    try:
+        res = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],
+            timeout=timeout, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        salida = (res.stdout or "").strip()
+        if not salida:
+            return None
+        if salida.startswith("["):
+            return json.loads(salida)
+        ini, fin = salida.find("{"), salida.rfind("}")
+        if ini == -1:
+            return None
+        return json.loads(salida[ini:fin + 1])
+    except Exception:
+        return None
+
+
+def _dias_desde(fecha):
+    if not fecha:
+        return None
+    m = re.match(r"/Date\((\d+)\)/", str(fecha))
+    if m:
+        f = datetime.fromtimestamp(int(m.group(1)) / 1000)
+        return max(0, (datetime.now() - f).days)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            f = datetime.strptime(str(fecha).strip()[:19], fmt)
+            return max(0, (datetime.now() - f).days)
+        except Exception:
+            continue
+    return None
+
+
+def salud_discos():
+    script = r"""
+$out = @()
+try {
+  Get-PhysicalDisk -ErrorAction Stop | ForEach-Object {
+    $p = $_
+    try { $rc = $p | Get-StorageReliabilityCounter -ErrorAction Stop } catch { return }
+    $out += [pscustomobject]@{ Nombre=$p.FriendlyName; Vida=[math]::Round(100 - $rc.Wear); Horas=$rc.PowerOnHours; Ciclos=$rc.StartStopCycleCount }
+  }
+} catch {}
+if ($out.Count) { $out | ConvertTo-Json -Compress } else { "{}" }
+"""
+    r = _ejecutar_ps_json(script)
+    return r if isinstance(r, list) else ([r] if isinstance(r, dict) and r else [])
+
+
+def slots_ram():
+    script = r"""
+try {
+  $arr = Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop | Select-Object -First 1
+  $chips = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop)
+  [pscustomobject]@{ Slots=[int]$arr.MemoryDevices; Ocupados=$chips.Count; MaxGB=[math]::Round($arr.MaxCapacity/1MB); UsadoGB=[math]::Round(($chips | Measure-Object -Property Capacity -Sum).Sum/1GB, 0) } | ConvertTo-Json -Compress
+} catch { "{}" }
+"""
+    return _ejecutar_ps_json(script)
+
+
+def estado_bateria_ciclos():
+    script = r"""
+$r = [pscustomobject]@{ Ciclos=$null; Cargador=$null; Carga=$null }
+try {
+  $b = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
+  if ($b) {
+    switch ([int]$b.BatteryStatus) {
+      1 { $r.Cargador = "Bateria en uso" }
+      2 { $r.Cargador = "Cargador conectado" }
+      3 { $r.Cargador = "Cargador conectado (carga completa)" }
+      default { $r.Cargador = "Estado " + [string]$b.BatteryStatus }
+    }
+    $r.Carga = [int]$b.EstimatedChargeRemaining
+  }
+} catch {}
+try {
+  $cc = Get-CimInstance -Namespace root\WMI -ClassName BatteryCycleCount -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($cc -and $cc.CycleCount) { $r.Ciclos = [int]$cc.CycleCount }
+} catch {}
+if ($null -eq $r.Ciclos) {
+  try {
+    $arch = Join-Path $env:TEMP "optichek_batt_report.html"
+    & powercfg /batteryreport /output $arch | Out-Null
+    if (Test-Path $arch) {
+      $txt = Get-Content $arch -Raw
+      if ($txt -match "Cycle\s+Count\s*</span>\s*</td>\s*<td>\s*([^<>]+)") {
+        $v = $Matches[1].Trim()
+        if ($v -match '^\d+$') { $r.Ciclos = [int]$v }
+      }
+      Remove-Item $arch -Force -ErrorAction SilentlyContinue
+    }
+  } catch {}
+}
+$r | ConvertTo-Json -Compress
+"""
+    return _ejecutar_ps_json(script)
+
+
+def bsod_30d():
+    script = r"""
+try {
+  $desde = (Get-Date).AddDays(-30)
+  $n = @(Get-WinEvent -FilterHashtable @{ LogName='System'; Id=41,1001; StartTime=$desde } -ErrorAction SilentlyContinue).Count
+  [pscustomobject]@{ N=$n } | ConvertTo-Json -Compress
+} catch { "{}" }
+"""
+    r = _ejecutar_ps_json(script)
+    if isinstance(r, dict) and isinstance(r.get("N"), int):
+        return r["N"]
+    return None
+
+
+def actualizaciones_windows():
+    script = r"""
+$r = [pscustomobject]@{ Busqueda=$null; Instalacion=$null }
+try {
+  $p = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect" -ErrorAction SilentlyContinue
+  if ($p -and $p.LastSuccessTime) { $r.Busqueda = $p.LastSuccessTime }
+} catch {}
+try {
+  $p = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install" -ErrorAction SilentlyContinue
+  if ($p -and $p.LastSuccessTime) { $r.Instalacion = $p.LastSuccessTime }
+} catch {}
+if ($null -eq $r.Busqueda -or $null -eq $r.Instalacion) {
+  $log = Join-Path $env:WINDIR "SoftwareDistribution\ReportingEvents.log"
+  if (Test-Path $log) {
+    $lineas = Get-Content $log -ErrorAction SilentlyContinue
+    for ($i = $lineas.Count - 1; $i -ge 0; $i--) {
+      $la = $lineas[$i]
+      if ($la -match "(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})") {
+        $fecha = $Matches[1]
+        if ($null -eq $r.Instalacion -and $la -match "AGENT_INSTALLING_SUCCEEDED") { $r.Instalacion = $fecha }
+        if ($null -eq $r.Busqueda -and $la -match "AGENT_DETECTION_FINISHED") { $r.Busqueda = $fecha }
+        if ($null -ne $r.Busqueda -and $null -ne $r.Instalacion) { break }
+      }
+    }
+  }
+}
+$r | ConvertTo-Json -Compress
+"""
+    return _ejecutar_ps_json(script)
+
+
+def antivirus_estado():
+    script = r"""
+$r = @()
+try {
+  $m = Get-MpComputerStatus -ErrorAction SilentlyContinue
+  if ($m) {
+    $r += [pscustomobject]@{ Nombre="Windows Defender"; Activo=[bool]$m.AntivirusEnabled; Firma=$m.AntivirusSignatureLastUpdated }
+  }
+} catch {}
+if (-not $r.Count) {
+  try {
+    Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue | ForEach-Object {
+      $r += [pscustomobject]@{ Nombre=$_.displayName; Activo=(([int]$_.productState -band 0x10000) -ne 0); Firma=$null }
+    }
+  } catch {}
+}
+if ($r.Count) { $r | ConvertTo-Json -Compress } else { "{}" }
+"""
+    r = _ejecutar_ps_json(script)
+    return r if isinstance(r, list) else ([r] if isinstance(r, dict) and r else [])
+
+
+def navegadores_instalados():
+    script = r"""
+$out = @{}
+$claves = @(
+  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+foreach ($clave in $claves) {
+  try {
+    Get-ItemProperty $clave -ErrorAction SilentlyContinue | ForEach-Object {
+      $dn = $_.DisplayName
+      if ($dn) {
+        $base = $null
+        if ($dn -match "Chrome") { $base = "Google Chrome" }
+        elseif ($dn -match "Firefox") { $base = "Mozilla Firefox" }
+        elseif ($dn -match "Edge") { if ($dn -notmatch "WebView|Update") { $base = "Microsoft Edge" } }
+        elseif ($dn -match "Brave") { $base = "Brave" }
+        elseif ($dn -match "Opera") { $base = "Opera" }
+        elseif ($dn -match "Vivaldi") { $base = "Vivaldi" }
+        if ($base -and -not $out.ContainsKey($base)) {
+          $inst = $null
+          if ($_.InstallDate -match "^(\d{4})(\d{2})(\d{2})") { $inst = "$($Matches[1])/$($Matches[2])/$($Matches[3])" }
+          $out[$base] = [pscustomobject]@{ Nombre=$base; Version=$_.DisplayVersion; Instalacion=$inst }
+        }
+      }
+    }
+  } catch {}
+}
+if ($out.Values.Count) { @($out.Values) | ConvertTo-Json -Compress } else { "{}" }
+"""
+    r = _ejecutar_ps_json(script)
+    return r if isinstance(r, list) else ([r] if isinstance(r, dict) and r else [])
+
+
+def _ps_lista(r):
+    return r if isinstance(r, list) else ([r] if isinstance(r, dict) and r else [])
+
+
+def archivos_temporales():
+    script = r"""
+$out = [pscustomobject]@{ TempUsuario=$null; TempSistema=$null; WindowsUpdate=$null; Prefetch=$null; Minidump=$null }
+function tam-mb($ruta) {
+  if (-not (Test-Path -LiteralPath $ruta)) { return $null }
+  $s = (Get-ChildItem -LiteralPath $ruta -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+  if ($null -eq $s) { return 0 }
+  return [math]::Round($s / 1MB, 1)
+}
+$out.TempUsuario   = tam-mb ([System.IO.Path]::GetTempPath())
+$out.TempSistema   = tam-mb (Join-Path $env:WINDIR "Temp")
+$out.WindowsUpdate = tam-mb (Join-Path $env:WINDIR "SoftwareDistribution\Download")
+$out.Prefetch      = tam-mb (Join-Path $env:WINDIR "Prefetch")
+$out.Minidump      = tam-mb (Join-Path $env:WINDIR "Minidump")
+$out | ConvertTo-Json -Compress
+"""
+    return _ejecutar_ps_json(script)
+
+
+def servicios_terceros():
+    script = r"""
+Get-CimInstance Win32_Service -ErrorAction SilentlyContinue -Filter "StartMode='Auto' AND State='Running'" |
+  Where-Object { $_.PathName -and $_.PathName -notmatch '\\Windows\\' -and $_.PathName -notmatch 'WindowsApps' -and $_.PathName -notmatch 'ClickToRun' -and $_.PathName -notmatch 'GameInput' -and $_.PathName -notmatch 'Windows Defender' } |
+  Select-Object -First 20 @{N='Nombre';E={$_.Name}}, @{N='Mostrar';E={$_.DisplayName}}, @{N='Ruta';E={$_.PathName}} |
+  ConvertTo-Json -Compress
+"""
+    return _ps_lista(_ejecutar_ps_json(script))
+
+
+def tareas_terceros():
+    script = r"""
+Get-ScheduledTask -ErrorAction SilentlyContinue |
+  Where-Object { $_.TaskPath -notlike '\Microsoft\*' -and $_.State -ne 'Disabled' } |
+  Select-Object -First 12 | ForEach-Object {
+    $acc = $_.Actions | Select-Object -First 1
+    [pscustomobject]@{
+      Nombre = $_.TaskName
+      Estado = [string]$_.State
+      Ejecuta = $(if ($acc -and $acc.Execute) { $acc.Execute } else { $null })
+      Origen = $_.TaskPath
+    }
+  } | ConvertTo-Json -Compress
+"""
+    return _ps_lista(_ejecutar_ps_json(script, timeout=90))
+
+
+def limpiar_temporales():
+    script = r"""
+$res = [pscustomobject]@{ Archivos=0; MB=0.0; Errores=0 }
+$destinos = @(
+  [System.IO.Path]::GetTempPath(),
+  (Join-Path $env:WINDIR "Temp"),
+  (Join-Path $env:WINDIR "SoftwareDistribution\Download"),
+  (Join-Path $env:WINDIR "Prefetch"),
+  (Join-Path $env:WINDIR "Minidump")
+)
+foreach ($ruta in $destinos) {
+  if (-not (Test-Path -LiteralPath $ruta)) { continue }
+  Get-ChildItem -LiteralPath $ruta -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    $tam = 0.0
+    if ($_.PSIsContainer) {
+      $s = (Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+      if ($s) { $tam = $s / 1MB }
+    } else {
+      try { $tam = $_.Length / 1MB } catch {}
+    }
+    try {
+      Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+      $res.Archivos += 1
+      $res.MB += $tam
+    } catch { $res.Errores += 1 }
+  }
+}
+$res.MB = [math]::Round($res.MB, 1)
+$res | ConvertTo-Json -Compress
+"""
+    return _ejecutar_ps_json(script, timeout=240)
+
+
+def _basura_total_mb(datos):
+    basura = datos.get("Temporales") or {}
+    return sum(float(v) for v in basura.values() if isinstance(v, (int, float)))
+
+
+def formato_tamano_mb(mb):
+    mb = float(mb or 0)
+    if mb >= 1024:
+        return f"{fmt(mb / 1024, 2)} GB"
+    return f"{fmt(mb, 1)} MB"
+
+
+def recomendaciones_comerciales(datos):
+    rec = []
+    for d in datos.get("Discos_Fisicos", []):
+        modelo = (d.get("Modelo") or "disco").strip()
+        vida = d.get("Vida_Pct")
+        smart = smart_norm(d.get("SMART"))
+        if smart.startswith("FAIL") or "FAIL" in smart:
+            rec.append(("problema", f"El disco {modelo} reporta falla SMART. Se recomienda respaldo inmediato y reemplazo por un SSD."))
+        elif isinstance(vida, (int, float)):
+            if vida < 15:
+                rec.append(("problema", f"El disco {modelo} tiene {fmt(vida, 0)}% de vida restante. Reemplazo preventivo por SSD antes de una falla."))
+            elif vida < 50:
+                rec.append(("atencion", f"El disco {modelo} esta desgastado ({fmt(vida, 0)}% de vida restante). Un cambio preventivo evita perdida de datos."))
+    libre_c = libre_en("C:", datos.get("Particiones", []))
+    total_c = total_en("C:", datos.get("Particiones", []))
+    if libre_c is not None and total_c and 100 * libre_c / total_c < 15:
+        rec.append(("atencion", "El disco principal esta casi lleno. Se sugiere migrar a un SSD de mayor capacidad para mantener el rendimiento."))
+    bat = datos.get("Bateria") or {}
+    salud = bat.get("Salud_Pct")
+    if isinstance(salud, (int, float)):
+        if salud < 50:
+            rec.append(("problema", "La bateria conserva menos del 50% de su capacidad original. Se recomienda reemplazo de bateria por desgaste avanzado."))
+        elif salud < UMBRAL_BATERIA_ATENCION:
+            rec.append(("atencion", "La bateria muestra desgaste moderado. Un reemplazo oportuno evita reclamos del cliente."))
+    ram_pct = (datos.get("RAM", {}) or {}).get("En_Uso_Pct", 0)
+    if ram_pct >= UMBRAL_RAM_ATENCION:
+        rec.append(("atencion", "El uso de memoria es elevado en reposo. Ampliar la memoria RAM es la mejora mas rentable para este equipo."))
+    slots = datos.get("Slots_RAM") or {}
+    if isinstance(slots.get("Ocupados"), int) and isinstance(slots.get("Slots"), int) and 0 <= slots["Ocupados"] < slots["Slots"]:
+        libres = slots["Slots"] - slots["Ocupados"]
+        if libres == 1:
+            rec.append(("info", f"Queda 1 slot de RAM libre de {slots['Slots']}. Una ampliacion de memoria es simple y economica."))
+        else:
+            rec.append(("info", f"Quedan {libres} slots de RAM libres de {slots['Slots']}. Una ampliacion de memoria es simple y economica."))
+    bsod = datos.get("BSOD_30d")
+    if isinstance(bsod, int) and bsod >= 2:
+        rec.append(("problema", f"Se registraron {bsod} pantallas azules en 30 dias. Se recomienda revisar drivers, memoria y registro del sistema."))
+    temp = temp_maxima(datos)
+    if temp is not None and temp > TEMP_MAX_ATENCION:
+        rec.append(("atencion", "El equipo alcanza temperaturas altas. Un servicio de limpieza interna y pasta termica previene fallas mayores."))
+    uptime = datos.get("Uptime_Horas")
+    if isinstance(uptime, (int, float)) and uptime > 48:
+        rec.append(("info", "El equipo lleva mas de 48 h encendido. Se sugiere reiniciar para liberar la memoria en cache y aplicar actualizaciones pendientes."))
+    basura_mb = _basura_total_mb(datos)
+    if basura_mb >= 1024:
+        rec.append(("atencion", f"Hay {fmt(basura_mb / 1024, 1)} GB de archivos temporales. Una limpieza del sistema (1 clic) libera espacio y deja el equipo mas fluido."))
+    if len(datos.get("Servicios_Terceros") or []) >= 3:
+        rec.append(("info", "Se detectaron varios servicios de terceros iniciando con Windows. Revisar servicios y tareas programadas optimiza el arranque."))
+    return rec
 
 
 def escanear(progreso=None):
@@ -540,6 +1041,20 @@ def escanear(progreso=None):
     discos = obtener_discos(c)
     agregar_smart_detallado(discos)
     particiones = obtener_particiones()
+    saluda_discos = salud_discos() or []
+    for d in discos:
+        modelo = (d.get("Modelo") or "").lower()
+        for s in saluda_discos:
+            nom = (s.get("Nombre") or "").lower()
+            if nom and (nom in modelo or modelo in nom):
+                d["Vida_Pct"] = s.get("Vida")
+                d["Horas_Encendidas"] = s.get("Horas")
+                d["Ciclos_Arranque"] = s.get("Ciclos")
+                break
+        else:
+            d.setdefault("Vida_Pct", None)
+            d.setdefault("Horas_Encendidas", None)
+            d.setdefault("Ciclos_Arranque", None)
 
     paso("Leyendo programas de inicio...")
     inicio = obtener_programas_inicio(c)
@@ -549,7 +1064,26 @@ def escanear(progreso=None):
     gpu = obtener_gpu(c)
     placa = obtener_placa(c)
     bateria = obtener_bateria()
+    bat_ciclos = estado_bateria_ciclos() or {}
+    if isinstance(bateria, dict):
+        bateria["Ciclos"] = bat_ciclos.get("Ciclos")
+        bateria["Cargador"] = bat_ciclos.get("Cargador")
+        bateria["Carga_Pct"] = bat_ciclos.get("Carga")
     uptime = round((datetime.now().timestamp() - psutil.boot_time()) / 3600, 1)
+
+    paso("Revisando seguridad y actualizaciones...")
+    bsod = bsod_30d()
+    upd = actualizaciones_windows()
+    av = antivirus_estado() or []
+    nav = navegadores_instalados() or []
+    slots = slots_ram()
+
+    paso("Analizando archivos temporales...")
+    basura = archivos_temporales() or {}
+
+    paso("Auditando servicios y tareas de terceros...")
+    serv_ter = servicios_terceros()
+    tareas_ter = tareas_terceros()
 
     paso("Escaneo completado")
     return {
@@ -566,6 +1100,14 @@ def escanear(progreso=None):
         "Placa": placa,
         "Bateria": bateria,
         "Uptime_Horas": uptime,
+        "Slots_RAM": slots,
+        "BSOD_30d": bsod,
+        "WindowsUpdate": upd,
+        "Antivirus": av,
+        "Navegadores": sorted(nav, key=lambda n: (n.get("Nombre") or "").lower()),
+        "Temporales": basura,
+        "Servicios_Terceros": serv_ter,
+        "Tareas_Terceros": tareas_ter,
     }
 
 
@@ -630,33 +1172,49 @@ def diagnosticar(datos):
     def add(sev, cat, titulo, detalle):
         hallazgos.append({"severidad": sev, "categoria": cat, "titulo": titulo, "detalle": detalle})
 
-    for d in datos["Discos_Fisicos"]:
+    discos = datos.get("Discos_Fisicos", [])
+    for d in discos:
         sm = smart_norm(d.get("SMART"))
-        nombre = d["Modelo"]
+        nombre = d.get("Modelo", "Disco")
+        tipo = d.get("Tipo", "")
+        et_disco = f"{nombre} ({tipo})" if tipo and tipo != "Disco" else nombre
         if sm.startswith("OK"):
-            add("ok", "Almacenamiento", f"S.M.A.R.T. correcto: {nombre}", "El disco no reporta fallas internas.")
+            add("ok", "Almacenamiento", f"S.M.A.R.T. correcto: {et_disco}", "El disco no reporta fallas internas.")
         elif sm:
-            add("problema", "Almacenamiento", f"S.M.A.R.T. en falla: {nombre}", f"Estado reportado: {sm}. Se recomienda respaldar y reemplazar el disco.")
+            add("problema", "Almacenamiento", f"S.M.A.R.T. en falla: {et_disco}", f"Estado reportado: {sm}. Se recomienda respaldar y reemplazar el disco inmediatamente.")
+        vida = d.get("Vida_Pct")
+        if isinstance(vida, (int, float)):
+            if vida < 15:
+                add("problema", "Almacenamiento", f"Vida util agotada del SSD: {fmt(vida, 0)}%", "El contador de desgaste (Wear) indica fin de vida util cercano. Reemplazo preventivo recomendado.")
+            elif vida < 50:
+                add("atencion", "Almacenamiento", f"SSD desgastado: {fmt(vida, 0)}% de vida restante", "El desgaste acumulado recomienda planificar un reemplazo del disco a mediano plazo.")
 
-    libre_c = libre_en("C:", datos["Particiones"])
-    total_c = total_en("C:", datos["Particiones"])
+    discos_hdd = [d for d in discos if d.get("Tipo") == "HDD"]
+    discos_ssd = [d for d in discos if "SSD" in d.get("Tipo", "")]
+    if discos_hdd and not discos_ssd:
+        add("atencion", "Almacenamiento", "Sistema operando en disco mecanico (HDD)", "Se detecto unicamente almacenamiento HDD. Actualizar a un disco SSD aumentara drasticamente la velocidad del equipo.")
+
+    libre_c = libre_en("C:", datos.get("Particiones", []))
+    total_c = total_en("C:", datos.get("Particiones", []))
     if libre_c is not None and total_c:
         pct = 100 * libre_c / total_c
         if libre_c < UMBRAL_LIBRE_GB_PROBLEMA or pct < 5:
-            add("problema", "Almacenamiento", f"Espacio critico en C: ({fmt(libre_c)} GB libres)", "Quedan menos del 5% de espacio libre; esto degrada Windows y evita actualizaciones.")
+            add("problema", "Almacenamiento", f"Espacio critico en C: ({fmt(libre_c)} GB libres)", "Quedan menos del 5% de espacio libre; esto degrada Windows y bloquea actualizaciones.")
         elif pct < UMBRAL_LIBRE_PCT_ATENCION:
             add("atencion", "Almacenamiento", f"Espacio bajo en C: ({fmt(libre_c)} GB libres)", f"Queda menos del {UMBRAL_LIBRE_PCT_ATENCION}% de espacio libre. Conviene liberar espacio.")
         else:
             add("ok", "Almacenamiento", f"Espacio suficiente en C: ({fmt(libre_c)} GB libres)", f"{fmt(pct, 0)}% del disco disponible.")
 
-    ram_pct = datos["RAM"]["En_Uso_Pct"]
+    ram = datos.get("RAM", {})
+    ram_pct = ram.get("En_Uso_Pct", 0)
     if ram_pct >= UMBRAL_RAM_ATENCION:
         add("atencion", "Memoria", f"Uso elevado de memoria ({fmt(ram_pct, 0)}%)",
             "Medido en reposo relativo; puede ser normal si hay muchas aplicaciones abiertas. Si la PC esta lenta, evaluar ampliar RAM o revisar procesos.")
     else:
-        add("ok", "Memoria", f"Uso de memoria dentro de lo normal ({fmt(ram_pct, 0)}%)", f"Total instalado: {datos['RAM']['Total_GB']} GB.")
+        add("ok", "Memoria", f"Uso de memoria dentro de lo normal ({fmt(ram_pct, 0)}%)", f"Total instalado: {ram.get('Total_GB', '-')} GB.")
 
-    n_inicio = len(datos["Inicio"])
+    inicio = datos.get("Inicio", [])
+    n_inicio = len(inicio)
     if n_inicio >= UMBRAL_INICIO_PROBLEMA:
         add("problema", "Arranque", f"{n_inicio} programas se inician con Windows", "Exceso de programas al inicio: alarga el arranque y consume recursos. Depurar prioritariamente.")
     elif n_inicio >= UMBRAL_INICIO_ATENCION:
@@ -666,10 +1224,10 @@ def diagnosticar(datos):
 
     bat = datos.get("Bateria")
     if bat:
-        salud = bat["Salud_Pct"]
+        salud = bat.get("Salud_Pct", 0)
         if salud < UMBRAL_BATERIA_PROBLEMA:
             add("problema", "Bateria", f"Bateria degradada: {fmt(salud)}% de capacidad original",
-                f"Conserva {bat['Actual_mWh']} mWh de los {bat['Diseno_mWh']} mWh de fabrica. Autonomia muy reducida; considerar reemplazo.")
+                f"Conserva {bat.get('Actual_mWh', 0)} mWh de los {bat.get('Diseno_mWh', 0)} mWh de fabrica. Autonomia muy reducida; considerar reemplazo.")
         elif salud < UMBRAL_BATERIA_ATENCION:
             add("atencion", "Bateria", f"Bateria con desgaste: {fmt(salud)}% de capacidad original",
                 "La autonomia esta notablemente reducida respecto a la fabrica.")
@@ -694,6 +1252,38 @@ def diagnosticar(datos):
     uptime = datos.get("Uptime_Horas")
     if uptime is not None and uptime >= UMBRAL_UPTIME_HORAS:
         add("atencion", "Sistema", f"Sin reiniciar hace {fmt(uptime / 24, 0)} dias", "Un reinicio libera memoria y aplica actualizaciones pendientes.")
+
+    bsod = datos.get("BSOD_30d")
+    if isinstance(bsod, int) and bsod > 0:
+        if bsod >= 2:
+            add("problema", "Sistema", f"{bsod} pantallas azules en 30 dias", "El visor de eventos registra apagados inesperados o errores de pantalla azul. Revisar drivers, memoria y estabilidad del sistema.")
+        else:
+            add("atencion", "Sistema", f"1 evento de apagado inesperado en 30 dias", "Se registro una pantalla azul o apagon en el visor de eventos. Conviene monitorear.")
+
+    bat = datos.get("Bateria") or {}
+    ciclos = bat.get("Ciclos")
+    if isinstance(ciclos, int) and ciclos >= 800:
+        add("atencion", "Bateria", f"Bateria con {ciclos} ciclos de carga", "Un recuento elevado de ciclos indica desgaste acumulado; considerar reemplazo proactivo.")
+
+    basura_mb = _basura_total_mb(datos)
+    if basura_mb >= 1024:
+        add("atencion", "Sistema", f"Archivos temporales acumulados: {fmt(basura_mb / 1024, 1)} GB",
+            "Se acumularon temporales de usuario y del sistema. Una limpieza de 1 clic liberara espacio en disco.")
+    elif basura_mb >= 512:
+        add("info", "Sistema", f"Archivos temporales: {fmt(basura_mb / 1024, 1)} GB",
+            "Hay archivos temporales acumulados que una limpieza puede liberar.")
+
+    serv_ter = datos.get("Servicios_Terceros") or []
+    tareas_ter = datos.get("Tareas_Terceros") or []
+    if len(serv_ter) >= 3:
+        add("atencion", "Sistema", f"{len(serv_ter)} servicios de terceros activos",
+            "Varios servicios externos se inician automaticamente con Windows; conviene revisarlos para acelerar el arranque.")
+    elif len(serv_ter) >= 1:
+        add("info", "Sistema", f"{len(serv_ter)} servicio(s) de terceros activo(s)",
+            "Se detectaron servicios externos iniciados con el sistema; verificar que todos sean necesarios.")
+    if len(tareas_ter) >= 5:
+        add("info", "Sistema", f"{len(tareas_ter)} tareas programadas de terceros",
+            "Hay varias tareas programadas externas; conviene revisar que no sean innecesarias.")
 
     hallazgos.sort(key=lambda x: SEV_ORDEN.get(x["severidad"], 9))
     return hallazgos
@@ -773,6 +1363,8 @@ def fila_metrica(nombre, a, d, unidad="", mejor="bajo", dec=1):
     if num(a) and num(d):
         dif = round(d - a, 2)
         umbral = 0.05 if dec > 0 else 1
+        if unidad == "%" and dec == 0 and umbral < 10:
+            umbral = 10
         if abs(dif) < umbral:
             cls, etiqueta_txt, delta_txt = "neutro", "SIN CAMBIO", ""
         else:
@@ -803,7 +1395,7 @@ body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #eef1f5; color: 
 h1 { font-size: 21px; color: #14345c; letter-spacing: .3px; }
 .subtitulo { color: #66707d; font-size: 13px; margin-top: 3px; }
 .cabecera { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 3px solid #2b6cb0; padding-bottom: 16px; }
-.meta { font-size: 12px; color: #555; line-height: 1.75; text-align: right; white-space: nowrap; }
+.meta { font-size: 12px; color: #555; line-height: 1.75; text-align: right; }
 .btn { background: #2b6cb0; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer; margin-top: 8px; }
 .btn:hover { background: #1e4e8c; }
 .btn-flotante { position: fixed; bottom: 22px; right: 26px; margin-top: 0; z-index: 99; font-size: 14px; padding: 10px 18px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); }
@@ -822,6 +1414,8 @@ h1 { font-size: 21px; color: #14345c; letter-spacing: .3px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { background: #2b6cb0; color: #fff; text-align: left; padding: 8px 10px; font-weight: 600; }
 td { padding: 7px 10px; border-bottom: 1px solid #e3e8ef; vertical-align: top; word-break: break-word; }
+.tabla-lista td { padding: 6px 8px; line-height: 1.45; }
+.tabla-lista td:nth-child(2) { overflow-wrap: anywhere; }
 tbody tr:nth-child(even) td { background: #f7f9fc; }
 .ok { color: #15803d; font-weight: 600; }
 .mal { color: #dc2626; font-weight: 600; }
@@ -841,11 +1435,39 @@ tbody tr:nth-child(even) td { background: #f7f9fc; }
 .pie { margin-top: 26px; font-size: 11px; color: #98a2b3; text-align: center; }
 .marca { position: fixed; bottom: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 3px 18px; font-size: 10px; color: #475569; background: #f1f5f9; border-top: 1px solid #e2e8f0; z-index: 5; }
 .marca img { height: 20px; }
+@page {
+  size: A4;
+  margin: 0mm;
+  padding: 0mm;
+}
 @media print {
-  body { background: #fff; padding: 0; }
-  .hoja { box-shadow: none; border-radius: 0; max-width: none; padding: 8mm 10mm 14mm; }
+  @page {
+    size: A4;
+    margin: 0mm;
+    padding: 0mm;
+  }
+  html, body {
+    background: #fff;
+    padding: 0;
+    margin: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .hoja {
+    box-shadow: none;
+    border-radius: 0;
+    max-width: none;
+    padding: 10mm 12mm 14mm;
+    margin: 0 auto;
+  }
+  .marca {
+    display: none !important;
+  }
   .no-print { display: none !important; }
-  th, .pill, tbody tr:nth-child(even) td, .hero, .dot { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  th, .pill, tbody tr:nth-child(even) td, .hero, .dot {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   .salto-pagina { page-break-before: always; }
   .seccion { page-break-inside: avoid; }
 }
@@ -887,16 +1509,17 @@ def _marca_tecnico_html():
     nombre = esc(lic.get("nombre") or "")
     wa = esc(lic.get("whatsapp") or "")
     img = ""
-    logo = lic.get("logo") or ""
-    if logo and os.path.exists(logo):
-        img = f"<img src='file:///{logo.replace(chr(92), '/')}' alt='logo'>"
+    logo_src = _logo_base64(lic.get("logo") or "")
+    if logo_src:
+        img = f"<img src='{logo_src}' alt='logo'>"
     texto = f"<b>{nombre}</b>" + (f" &middot; WhatsApp {wa}" if wa else "")
     return f"<div class='marca'>{img}<span>{texto}</span></div>"
 
 
-def _pagina(titulo, contenido):
-    marca = _marca_tecnico_html()
-    return f"""<!DOCTYPE html>
+def _pagina(titulo, contenido, para_pdf=False):
+    marca = "" if para_pdf else _marca_tecnico_html()
+    botones = "" if para_pdf else "<button class='btn no-print btn-flotante' onclick=\"window.print()\">Guardar como PDF</button><p class='no-print aviso-pdf'>Informe generado por OptiChek. Guarda la version PDF desde la aplicacion (boton PDF del historial).</p>"
+    html = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -908,11 +1531,11 @@ def _pagina(titulo, contenido):
 <div class="hoja">
 {contenido}
 </div>
-<button class="btn no-print btn-flotante" onclick="window.print()">Guardar como PDF</button>
-<p class="no-print aviso-pdf">Informe generado por OptiChek. Guarda la version PDF desde la aplicacion (boton PDF del historial).</p>
+{botones}
 </body>
 </html>
 """
+    return re.sub(r"\.{2,}", ".", html)
 
 
 def _html_resumen_hardware(datos):
@@ -975,7 +1598,55 @@ def _html_pagina_cliente_escaneo(datos, hallazgos, servicio, num, tecnico):
     return cabecera + hero + nota
 
 
-def generar_html_escaneo(datos, num, servicio=None):
+def _celda_vida(d, clave):
+    v = d.get(clave)
+    if isinstance(v, (int, float)):
+        return f"{fmt(v, 0)} %" if clave == "Vida_Pct" else f"{fmt(v, 0)} h"
+    return "<span class='neutro'>N/D</span>"
+
+
+def _hace_dias(n):
+    if n is None:
+        return "no disponible"
+    if n <= 0:
+        return "hoy"
+    if n == 1:
+        return "ayer"
+    return f"hace {n} dia(s)"
+
+
+def _html_seccion_seguridad(datos):
+    filas = []
+    av_lista = datos.get("Antivirus") or []
+    if av_lista:
+        partes = []
+        for av in av_lista:
+            nombre = esc(av.get("Nombre") or "Antivirus")
+            act = "ACTIVO" if av.get("Activo") else "INACTIVO"
+            partes.append(f"{nombre}: <b>{act}</b>")
+            dias = _dias_desde(av.get("Firma"))
+            if dias is not None:
+                partes.append(f"<span class='neutro'>firmas actualizadas {_hace_dias(dias)}</span>")
+        filas.append(f"<tr><td style='width:44%'><b>Antivirus</b></td><td>{'<br>'.join(partes)}</td></tr>")
+    upd = datos.get("WindowsUpdate") or {}
+    bus = _dias_desde(upd.get("Busqueda"))
+    inst = _dias_desde(upd.get("Instalacion"))
+    wu_txt = "Sin datos de busqueda" if bus is None else f"Ultima busqueda: {_hace_dias(bus)}"
+    if inst is not None:
+        wu_txt += f"<br>Ultima instalacion: {_hace_dias(inst)}"
+    filas.append(f"<tr><td><b>Actualizaciones de Windows</b></td><td>{wu_txt}</td></tr>")
+    bsod = datos.get("BSOD_30d")
+    if isinstance(bsod, int):
+        bsod_txt = f"{bsod} en los ultimos 30 dias" if bsod else "Ninguna en los ultimos 30 dias"
+    else:
+        bsod_txt = "<span class='neutro'>No disponible</span>"
+    filas.append(f"<tr><td><b>Pantallas azules (BSOD)</b></td><td>{bsod_txt}</td></tr>")
+    return "".join(filas)
+
+
+def generar_html_escaneo(datos, num, servicio=None, para_pdf=False):
+    datos = dict(datos)
+    datos["Inicio"] = _inicio_limpio(datos.get("Inicio") or [])
     sis = datos["Sistema"]
     equipo = sis.get("Equipo", "Equipo")
     tecnico = (servicio or {}).get("Tecnico") or None
@@ -995,6 +1666,14 @@ def generar_html_escaneo(datos, num, servicio=None):
     else:
         celda_temp = "<span class='neutro'>No disponible: el hardware no expuso sensores compatibles</span>"
 
+    slots = datos.get("Slots_RAM") or {}
+    if isinstance(slots.get("Slots"), int) and isinstance(slots.get("Ocupados"), int):
+        slots_txt = f"{slots['Ocupados']} de {slots['Slots']} ocupados"
+        if isinstance(slots.get("MaxGB"), int):
+            slots_txt += f" (soporta hasta {slots['MaxGB']} GB)"
+    else:
+        slots_txt = "<span class='neutro'>No disponible</span>"
+
     filas_metricas = (
         fila_valor("Uso de memoria RAM", f"{fmt(datos['RAM']['En_Uso_Pct'], 0)} %")
         + fila_valor("Memoria virtual (swap) en uso", f"{fmt(datos['RAM']['Swap_En_Uso_Pct'], 0)} %")
@@ -1003,19 +1682,29 @@ def generar_html_escaneo(datos, num, servicio=None):
         + fila_valor("Tiempo de encendido (uptime)", f"{fmt(datos['Uptime_Horas'], 1)} h")
         + fila_valor("Temperatura maxima", celda_temp)
         + fila_valor("Espacio libre en C:", f"{fmt(libre_en('C:', datos['Particiones']), 1)} GB")
-        + (fila_valor("Salud de bateria", pill_bateria(bater["Salud_Pct"])) if bater else "")
+        + fila_valor("Archivos temporales", formato_tamano_mb(_basura_total_mb(datos)))
+        + fila_valor("Slots de memoria RAM", slots_txt)
     )
+    if bater:
+        filas_metricas += fila_valor("Salud de bateria", pill_bateria(bater["Salud_Pct"]) + (esc(f" &middot; {int(bater['Ciclos'])} ciclos") if isinstance(bater.get("Ciclos"), int) else ""))
+        cargador = bater.get("Cargador")
+        if cargador:
+            txt_carga = esc(str(cargador))
+            if isinstance(bater.get("Carga_Pct"), int):
+                txt_carga += esc(f" ({bater['Carga_Pct']}%)")
+            filas_metricas += fila_valor("Cargador", txt_carga)
 
     filas_diag = "".join(
         f"<tr><td style='width:110px'>{pill_severidad(h['severidad'])}</td>"
-        f"<td style='width:120px'>{esc(h['categoria'])}</td>"
+        f"<td style='width:150px'>{esc(h['categoria'])}</td>"
         f"<td><b>{esc(h['titulo'])}</b><br><span class='neutro'>{esc(h['detalle'])}</span></td></tr>"
         for h in hallazgos
     )
 
     filas_discos = "".join(
-        f"<tr><td>{esc(d['Modelo'])}</td><td>{esc(d['Interfaz'])}</td>"
-        f"<td>{d['Tamano_GB']} GB</td><td>{pill_smart(d['SMART'])}</td></tr>"
+        f"<tr><td>{esc(d['Modelo'])}</td><td>{pill('pill-neutro', esc(d.get('Tipo', 'Disco')))}</td><td>{esc(d['Interfaz'])}</td>"
+        f"<td>{d['Tamano_GB']} GB</td><td>{_celda_vida(d, 'Vida_Pct')}</td><td>{_celda_vida(d, 'Horas_Encendidas')}</td>"
+        f"<td>{pill_smart(d['SMART'])}</td></tr>"
         for d in datos["Discos_Fisicos"]
     )
 
@@ -1030,10 +1719,65 @@ def generar_html_escaneo(datos, num, servicio=None):
             f"<tr><td>{esc(p['Nombre'])}</td><td>{esc(p['Comando'])}</td><td>{esc(p['Ubicacion'])}</td></tr>"
             for p in datos["Inicio"]
         )
-        tabla_inicio = ("<table><thead><tr><th style='width:26%'>Programa</th><th>Comando</th><th style='width:28%'>Origen</th></tr></thead>"
+        tabla_inicio = ("<table class='tabla-lista'><thead><tr><th style='width:26%'>Programa</th><th>Comando</th><th style='width:28%'>Origen</th></tr></thead>"
                         f"<tbody>{filas_ini}</tbody></table>")
     else:
         tabla_inicio = "<p class='sin-cambios'>No se detectaron programas al inicio.</p>"
+
+    nav = datos.get("Navegadores") or []
+    if nav:
+        filas_nav = "".join(
+            f"<tr><td>{esc(n.get('Nombre', ''))}</td><td>{esc(n.get('Version') or 'N/D')}</td><td>{esc(n.get('Instalacion') or 'N/D')}</td></tr>"
+            for n in nav
+        )
+        seccion_nav = ("<div class='seccion'><h2>Navegadores instalados</h2>"
+                       "<table><thead><tr><th>Navegador</th><th>Version</th><th>Instalado</th></tr></thead>"
+                       f"<tbody>{filas_nav}</tbody></table></div>")
+    else:
+        seccion_nav = ""
+
+    seguro = _html_seccion_seguridad(datos)
+    seccion_seg = f"<div class='seccion'><h2>Seguridad y actualizaciones</h2><table><tbody>{seguro}</tbody></table></div>" if seguro else ""
+
+    basura = datos.get("Temporales") or {}
+    serv_ter = datos.get("Servicios_Terceros") or []
+    tareas_ter = datos.get("Tareas_Terceros") or []
+    tabla_temp = ""
+    if any(v is not None for v in basura.values()):
+        filas_temp = "".join(
+            f"<tr><td>{esc(t)}</td><td>{'-' if v is None else formato_tamano_mb(v)}</td></tr>"
+            for t, v in (
+                ("Temporales del usuario", basura.get("TempUsuario")),
+                ("Temporales del sistema", basura.get("TempSistema")),
+                ("Descargas de Windows Update", basura.get("WindowsUpdate")),
+                ("Precarga (Prefetch)", basura.get("Prefetch")),
+                ("Registros de minidump", basura.get("Minidump")),
+            )
+        )
+        tabla_temp = ("<div class='sub-bloque'>Archivos temporales</div>"
+                      "<table><thead><tr><th>Ubicacion</th><th style='width:30%'>Tamano actual</th></tr></thead>"
+                      f"<tbody>{filas_temp}</tbody></table>")
+    filas_ter = []
+    for s in serv_ter:
+        filas_ter.append(f"<tr><td>{esc(s.get('Nombre', '') or s.get('Mostrar', ''))}</td><td>{esc(s.get('Ruta') or 'N/D')}</td><td>Srv</td></tr>")
+    for t in tareas_ter:
+        filas_ter.append(f"<tr><td>{esc(t.get('Nombre', ''))}</td><td>{esc(t.get('Ejecuta') or 'N/D')}</td><td>Tarea</td></tr>")
+    tabla_ter = ""
+    if filas_ter:
+        tabla_ter = ("<div class='sub-bloque'>Servicios y tareas iniciados fuera de Windows</div>"
+                     "<table><thead><tr><th>Nombre</th><th>Ruta / Ejecutable</th><th style='width:15%'>Tipo</th></tr></thead>"
+                     f"<tbody>{''.join(filas_ter)}</tbody></table>")
+    if tabla_temp or tabla_ter:
+        seccion_limpieza = f"<div class='seccion'><h2>Limpieza y servicios</h2>{tabla_temp}{tabla_ter}</div>"
+    else:
+        seccion_limpieza = ""
+
+    recs = recomendaciones_comerciales(datos)
+    if recs:
+        items_rec = "".join(f"<li>{dot_severidad(sev)}{esc(texto)}</li>" for sev, texto in recs)
+        seccion_rec = f"<div class='seccion'><h2>Recomendaciones del tecnico</h2><ul class='lista-cliente'>{items_rec}</ul></div>"
+    else:
+        seccion_rec = ""
 
     cabecera_tecnica = _cabecera(
         "INFORME TECNICO DE REVISION",
@@ -1051,18 +1795,22 @@ def generar_html_escaneo(datos, num, servicio=None):
         + f"<div class='seccion'><h2>Metricas del sistema al momento del escaneo</h2>"
         + f"<table><tbody>{filas_metricas}</tbody></table></div>"
         + f"<div class='seccion'><h2>Resumen del hardware</h2>{_html_resumen_hardware(datos)}</div>"
-        + f"<div class='seccion'><h2>Almacenamiento y estado SMART</h2>"
-        + ("<table><thead><tr><th>Disco</th><th>Interfaz</th><th>Capacidad</th><th>SMART</th></tr></thead>"
+        + f"<div class='seccion'><h2>Almacenamiento, vida util y SMART</h2>"
+        + ("<table><thead><tr><th>Disco</th><th>Tipo</th><th>Interfaz</th><th>Capacidad</th><th>Vida restante</th><th>Encendido</th><th>SMART</th></tr></thead>"
            f"<tbody>{filas_discos}</tbody></table><br>"
            "<table><thead><tr><th>Unidad</th><th>Sistema de archivos</th><th>Total</th><th>Libre</th></tr></thead>"
            f"<tbody>{filas_part}</tbody></table></div>")
         + f"<div class='seccion'><h2>Programas al inicio ({len(datos['Inicio'])})</h2>{tabla_inicio}</div>"
+        + seccion_limpieza
+        + seccion_seg
+        + seccion_nav
+        + seccion_rec
         + "<div class='firma'><div>Firma del tecnico</div><div>Firma del cliente</div></div>"
         + f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION} &mdash; Los porcentajes son valores instantaneos tomados al momento del escaneo.</p>"
     )
 
     titulo = f"Diagnostico #{num:03d} - {equipo}"
-    return _pagina(titulo, pagina_cliente + contenido_tecnico)
+    return _pagina(titulo, pagina_cliente + contenido_tecnico, para_pdf=para_pdf)
 
 
 def _tabla_hallazgos(lista, vacio):
@@ -1070,7 +1818,7 @@ def _tabla_hallazgos(lista, vacio):
         return f"<p class='sin-cambios'>{vacio}</p>"
     filas = "".join(
         f"<tr><td style='width:105px'>{pill_severidad(h['severidad'])}</td>"
-        f"<td style='width:115px'>{esc(h['categoria'])}</td><td>{esc(h['titulo'])}</td></tr>"
+        f"<td style='width:150px'>{esc(h['categoria'])}</td><td>{esc(h['titulo'])}</td></tr>"
         for h in lista
     )
     return ("<table><thead><tr><th>Severidad</th><th>Categoria</th><th>Hallazgo</th></tr></thead>"
@@ -1112,7 +1860,11 @@ def _html_pagina_cliente_diferencias(a, b, hallazgos_a, hallazgos_b, et_a, et_b,
     return cabecera + hero + nota
 
 
-def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
+def generar_html_diferencias(a, b, et_a, et_b, servicio=None, para_pdf=False):
+    a = dict(a)
+    a["Inicio"] = _inicio_limpio(a.get("Inicio") or [])
+    b = dict(b)
+    b["Inicio"] = _inicio_limpio(b.get("Inicio") or [])
     sis = a["Sistema"]
     equipo = sis.get("Equipo", "Equipo")
     tecnico = (servicio or {}).get("Tecnico") or None
@@ -1268,7 +2020,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
             + "almacenamiento, estado SMART y diagnostico automatico no presentan cambios.</p></div>"
             + f"<p class='pie'>OptiChek v{VERSION}</p>"
         )
-        return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", contenido)
+        return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", contenido, para_pdf=para_pdf)
 
     secciones = f"<div class='salto-pagina'></div>" + cabecera_tec
 
@@ -1326,7 +2078,7 @@ def generar_html_diferencias(a, b, et_a, et_b, servicio=None):
     secciones += "<div class='firma'><div>Firma del tecnico</div><div>Firma del cliente</div></div>"
     secciones += f"<p class='pie'>Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} por OptiChek v{VERSION}.</p>"
 
-    return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones)
+    return _pagina(f"Diferencias {et_a} vs {et_b} - {equipo}", pagina_cliente + secciones, para_pdf=para_pdf)
 
 
 _SERVIDOR_INFORMES = {"httpd": None, "puerto": None, "extra": {}}
@@ -1429,6 +2181,27 @@ def _perfil_edge_tmp(sufijo):
         pass
     try:
         os.makedirs(carpeta, exist_ok=True)
+        prefs_dir = os.path.join(carpeta, "Default")
+        os.makedirs(prefs_dir, exist_ok=True)
+        prefs = {
+            "printing": {
+                "print_preview_sticky_settings": {
+                    "headerFooterEnabled": False,
+                    "isHeaderFooterEnabled": False,
+                    "margins_type": 2,
+                    "paper_type": 0,
+                    "scaling": 100,
+                    "should_print_backgrounds": False,
+                    "should_print_selection_only": False
+                },
+                "print_header_footer": False
+            },
+            "plugins": {
+                "always_open_pdf_externally": False
+            }
+        }
+        with open(os.path.join(prefs_dir, "Preferences"), "w", encoding="utf-8") as f:
+            json.dump(prefs, f)
     except Exception:
         pass
     return carpeta
@@ -1436,10 +2209,17 @@ def _perfil_edge_tmp(sufijo):
 
 def _es_pdf_valido(ruta):
     try:
-        if not os.path.exists(ruta) or os.path.getsize(ruta) < 1000:
+        import time
+        if not os.path.exists(ruta):
+            time.sleep(0.5)
+            if not os.path.exists(ruta):
+                return False
+        time.sleep(0.5)
+        if os.path.getsize(ruta) < 1500:
             return False
         with open(ruta, "rb") as fh:
-            return fh.read(5) == b"%PDF-"
+            cabecera = fh.read(5)
+            return cabecera == b"%PDF-"
     except Exception:
         return False
 
@@ -1457,113 +2237,158 @@ def _firma_pdf(ruta):
         return "error: " + str(exc)
 
 
+def _esperar_pdf_valido(ruta, segundos=8):
+    import time
+    fin = time.monotonic() + segundos
+    while time.monotonic() < fin:
+        if _es_pdf_valido(ruta):
+            return True
+        time.sleep(0.4)
+    return False
+
+
+def _matar_edge_perfil(perfil):
+    try:
+        if not perfil:
+            return
+        viejo = os.environ.get("OPTICHEK_PERFIL")
+        os.environ["OPTICHEK_PERFIL"] = perfil
+        comando = (
+            "$p = Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\"; "
+            "foreach ($x in $p) { if ($x.CommandLine -and "
+            "$x.CommandLine.Contains('--user-data-dir=' + $env:OPTICHEK_PERFIL)) { "
+            "Stop-Process -Id $x.ProcessId -Force -ErrorAction SilentlyContinue } }"
+        )
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", comando],
+            timeout=30, capture_output=True, text=True,
+        )
+        if viejo is None:
+            os.environ.pop("OPTICHEK_PERFIL", None)
+        else:
+            os.environ["OPTICHEK_PERFIL"] = viejo
+    except Exception:
+        pass
+
+
 def generar_pdf_de_informe(ruta_html, ruta_pdf=None):
+    import time
     if not ruta_pdf:
         ruta_pdf = os.path.join(os.path.dirname(ruta_html), os.path.splitext(os.path.basename(ruta_html))[0] + ".pdf")
-    fallos = []
-    navegadores = [
-        _encontrar_navegador(),
-        "msedge",
-        "chrome",
-        "brave",
-    ]
-    fuentes = ["file:///" + ruta_html.replace("\\", "/")]
+    import http.server
+    import threading
+    servidor = None
+    perfil = None
+    pdf_temporal = None
+    navegador = None
+    detalles = []
     try:
-        fuentes.append(_servir_archivo(ruta_html))
-    except Exception:
-        pass
-    base_perfil = os.path.join(tempfile.gettempdir(), "optichek_pdf_perfil")
-    idx = 0
-    for navegador in navegadores:
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=os.path.dirname(ruta_html), **kwargs)
+            def log_message(self, format, *args):
+                pass
+
+        servidor = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        puerto = servidor.server_address[1]
+        threading.Thread(target=servidor.serve_forever, daemon=True).start()
+        navegador = _encontrar_navegador()
         if not navegador:
-            continue
-        for url in fuentes:
-            for intento in range(2):
+            raise FileNotFoundError("No se encontró Microsoft Edge ni Google Chrome")
+        file_url = "file:///" + os.path.abspath(ruta_html).replace("\\", "/")
+        fuentes = [
+            ("--headless=new", f"http://127.0.0.1:{puerto}/{os.path.basename(ruta_html)}"),
+            ("--headless", file_url),
+            ("--headless=new", file_url),
+        ]
+        idx = 0
+        for pasada in range(2):
+            for modo, fuente in fuentes:
                 idx += 1
-                perfil = _perfil_edge_tmp(f"{os.getpid()}_{idx}")
-                if os.path.exists(ruta_pdf):
-                    try:
-                        os.remove(ruta_pdf)
-                    except Exception:
-                        pass
+                perfil = _perfil_edge_tmp(f"{os.getpid()}_p{pasada}_{idx}")
+                pdf_temporal = os.path.join(tempfile.gettempdir(), f"optichek_{os.getpid()}_{time.time_ns()}.pdf")
                 args = [
-                    navegador,
-                    "--headless=new" if intento == 0 else "--headless",
-                    "--disable-gpu",
-                    "--disable-background-mode",
-                    f"--user-data-dir={perfil}",
-                    "--no-pdf-header-footer",
-                    "--print-to-pdf-no-header",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    f"--print-to-pdf={ruta_pdf}",
-                    url,
+                    navegador, modo, "--disable-gpu", "--no-sandbox",
+                    "--disable-extensions", "--disable-background-networking",
+                    "--no-first-run", "--no-default-browser-check",
+                    "--disable-crash-reporter", "--disable-features=msEdgeSidebarV2",
+                    "--allow-file-access-from-files", f"--user-data-dir={perfil}",
+                    f"--print-to-pdf={pdf_temporal}", fuente,
                 ]
                 try:
-                    res = subprocess.run(args, timeout=60, capture_output=True, text=True)
-                    fallos.append(
-                        f"{navegador} | {os.path.basename(url)[:60]} | file://{intento} | rc={res.returncode}"
-                        f" | firma={_firma_pdf(ruta_pdf)}"
-                        f" | size={(os.path.getsize(ruta_pdf) if os.path.exists(ruta_pdf) else 0)}"
-                        f" | stderr={str(res.stderr)[:160]}"
-                    )
+                    resultado = subprocess.run(args, timeout=60, capture_output=True, text=True)
+                    salida = (resultado.stderr or resultado.stdout or "sin salida").strip()[-200:]
                 except Exception as exc:
-                    fallos.append(f"{navegador} | {os.path.basename(url)[:60]} | intento{intento} | excepcion: {exc}")
-                if _es_pdf_valido(ruta_pdf):
-                    return ruta_pdf
-    shutil.rmtree(base_perfil, ignore_errors=True)
-    _guardar_debug_pdf(fallos, navegadores)
-    return None
-
-
-def _guardar_debug_pdf(errores, navegadores):
-    try:
-        ruta = os.path.join(tempfile.gettempdir(), "optichek_pdf_debug.txt")
-        linea = "-" * 60 + "\n"
-        contenido = datetime.now().strftime("%d/%m/%Y %H:%M:%S") + "\n" + linea
-        contenido += "Navegadores detectados:\n"
-        for nav in navegadores:
-            contenido += f"  {nav}\n"
+                    resultado = None
+                    salida = "excepcion: " + str(exc)
+                if _esperar_pdf_valido(pdf_temporal):
+                    try:
+                        shutil.copy2(pdf_temporal, ruta_pdf)
+                    except Exception:
+                        pass
+                    _matar_edge_perfil(perfil)
+                    if _es_pdf_valido(ruta_pdf):
+                        return ruta_pdf
+                _matar_edge_perfil(perfil)
+                rc = resultado.returncode if resultado is not None else "EXC"
+                detalles.append(f"{modo} | {os.path.basename(fuente)[:40]} | rc={rc} | {salida}")
+            time.sleep(1.0)
+        raise RuntimeError("Edge no creó el PDF. " + " | ".join(detalles[-6:]))
+    except Exception:
+        return None
+    finally:
+        if servidor:
+            servidor.shutdown()
+            servidor.server_close()
+        if perfil:
+            shutil.rmtree(perfil, ignore_errors=True)
+        if pdf_temporal:
+            try:
+                os.remove(pdf_temporal)
+            except OSError:
+                pass
         try:
-            salida = subprocess.run(["tasklist", "/FI", "IMAGENAME eq msedge.exe"], capture_output=True, text=True, timeout=10).stdout
-            contenido += "Instancias de Edge abiertas: " + str(salida.count("msedge.exe")) + "\n"
+            for d in glob.glob(os.path.join(tempfile.gettempdir(), "optichek_pdf_perfil_" + str(os.getpid()) + "_*")):
+                _matar_edge_perfil(d)
+                shutil.rmtree(d, ignore_errors=True)
         except Exception:
             pass
-        contenido += linea
-        for e in errores:
-            contenido += e + "\n"
-        with open(ruta, "a", encoding="utf-8") as fh:
-            fh.write(contenido)
-    except Exception:
-        pass
 
 
 def _generar_informe_con_pdf(contenido_html, nombre_base):
     descargas = carpeta_descargas()
     ruta_pdf_final = os.path.join(descargas, nombre_base + ".pdf")
+    ruta_html_final = os.path.join(descargas, nombre_base + ".html")
     tmp_dir = tempfile.mkdtemp(prefix="diag_inf_")
     ruta_html_tmp = os.path.join(tmp_dir, "informe.html")
     ruta_pdf_tmp = os.path.join(tmp_dir, "informe.pdf")
+    
     try:
         with open(ruta_html_tmp, "w", encoding="utf-8") as fh:
             fh.write(contenido_html)
+        
         ruta_pdf = generar_pdf_de_informe(ruta_html_tmp, ruta_pdf_tmp)
-        if ruta_pdf:
+        
+        if ruta_pdf and os.path.exists(ruta_pdf_tmp) and _es_pdf_valido(ruta_pdf_tmp):
             try:
                 shutil.copy2(ruta_pdf_tmp, ruta_pdf_final)
                 return ruta_pdf_final, True
-            except Exception:
-                return ruta_pdf_tmp, True
+            except Exception as e:
+                raise RuntimeError(f"Error copiando PDF a descargas: {e}")
+        else:
+            with open(ruta_html_final, "w", encoding="utf-8") as fh:
+                fh.write(contenido_html)
+            raise RuntimeError(f"Error generando PDF. Se guardó HTML en descargas para convertir manualmente. "
+                             f"Verifica que Microsoft Edge o Google Chrome esté disponible.\nArchivo: {os.path.basename(ruta_html_final)}")
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-    ruta_html_final = os.path.join(descargas, nombre_base + ".html")
-    with open(ruta_html_final, "w", encoding="utf-8") as fh:
-        fh.write(contenido_html)
-    return ruta_html_final, False
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def generar_informe_escaneo(datos, num, servicio=None):
-    contenido = generar_html_escaneo(datos, num, servicio)
+    contenido = generar_html_escaneo(datos, num, servicio, para_pdf=True)
     sid = (servicio or {}).get("Id", "SRV")
     nombre_slug = slug_equipo(nombre_escaneo(datos, num))[:24].strip("_")
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
@@ -1571,7 +2396,7 @@ def generar_informe_escaneo(datos, num, servicio=None):
 
 
 def generar_informe_comparacion(a, b, et_a, et_b, servicio=None):
-    contenido = generar_html_diferencias(a, b, et_a, et_b, servicio)
+    contenido = generar_html_diferencias(a, b, et_a, et_b, servicio, para_pdf=True)
     sid = (servicio or {}).get("Id", "SRV")
     na = et_a.replace("#", "")
     nb = et_b.replace("#", "")

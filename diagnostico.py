@@ -2,10 +2,9 @@ import os
 import threading
 import traceback
 import webbrowser
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from tkinter import messagebox
 
 import nucleo
 
@@ -24,16 +23,27 @@ TEXTO2 = "#94a3b8"
 TEXTO3 = "#64748b"
 
 
+def centrar_dialogo(dialogo, master, ancho=420, alto=360):
+    dialogo.update_idletasks()
+    mx = master.winfo_rootx()
+    my = master.winfo_rooty()
+    mw = master.winfo_width()
+    mh = master.winfo_height()
+    x = max(10, mx + (mw - ancho) // 2)
+    y = max(10, my + (mh - alto) // 2)
+    dialogo.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+
 class DialogoServicio(ctk.CTkToplevel):
     def __init__(self, master, al_crear):
         super().__init__(master)
         self.al_crear = al_crear
         self.title("Nuevo servicio")
-        self.geometry("420x360")
         self.resizable(False, False)
         self.transient(master)
-        self.grab_set()
         self.configure(fg_color=FONDO)
+        centrar_dialogo(self, master, 420, 360)
+        self.grab_set()
 
         cfg = nucleo.leer_config()
 
@@ -87,11 +97,11 @@ class DialogoModoTecnico(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
         self.title("Modo tecnico")
-        self.geometry("520x360")
         self.resizable(False, False)
         self.transient(master)
-        self.grab_set()
         self.configure(fg_color=FONDO)
+        centrar_dialogo(self, master, 520, 360)
+        self.grab_set()
 
         ctk.CTkLabel(self, text="MODO TECNICO", font=("Segoe UI", 18, "bold"), text_color=ACENTO).pack(pady=(22, 2))
         ctk.CTkLabel(
@@ -221,9 +231,9 @@ class SelectorLista(ctk.CTkToplevel):
         self.resizable(False, False)
         self.transient(master)
         self.configure(fg_color=FONDO)
-        x = master.winfo_rootx() + 140
-        y = master.winfo_rooty() + 120
-        self.geometry(f"+{x}+{y}")
+        alto = min(500, max(240, 110 + len(opciones) * 46 + (48 if crear_cmd else 0)))
+        ancho = 420
+        centrar_dialogo(self, master, ancho, alto)
 
         ctk.CTkLabel(self, text=titulo, font=("Segoe UI", 15, "bold"), text_color=TEXTO).pack(padx=20, pady=(18, 10), anchor="w")
 
@@ -431,6 +441,19 @@ class App(ctk.CTk):
             font=("Segoe UI", 12),
             command=self.abrir_descargas,
         ).pack(fill="x", pady=(8, 0))
+        ctk.CTkButton(
+            sec_acc,
+            text="Limpieza de temporales",
+            height=34,
+            corner_radius=10,
+            fg_color="transparent",
+            border_width=1,
+            border_color=AMBAR,
+            text_color=AMBAR,
+            hover_color=CARD,
+            font=("Segoe UI", 12),
+            command=self._iniciar_limpieza,
+        ).pack(fill="x", pady=(8, 0))
 
         lic = nucleo.tecnico_licenciado()
         self.pie_lat = ctk.CTkFrame(barra_lat, fg_color="transparent")
@@ -611,8 +634,7 @@ class App(ctk.CTk):
         if guardar:
             cfg = nucleo.leer_config()
             cfg["ultimo_servicio"] = sid
-            escribir = cfg
-            nucleo.escribir_config(escribir)
+            nucleo.escribir_config(cfg)
         self._refrescar_historial()
 
     def _al_elegir_servicio(self, sid):
@@ -856,35 +878,48 @@ class App(ctk.CTk):
         threading.Thread(target=self._hilo_escaneo, args=(nombre,), daemon=True).start()
 
     def _hilo_escaneo(self, nombre):
-        co_inicializado = False
-        try:
+        with nucleo.contexto_com():
             try:
-                import pythoncom
-                pythoncom.CoInitialize()
-                co_inicializado = True
-            except Exception:
-                pass
-
-            sid = self.servicio_activo
-            servicio = nucleo.cargar_servicio(sid)
-            datos = nucleo.escanear(progreso=self._progreso)
-            self._progreso("Guardando en el historial del servicio...")
-            num, _ruta = nucleo.guardar_escaneo(datos, sid, nombre)
-            self._progreso("Generando PDF en Descargas...")
-            salida, es_pdf = nucleo.generar_informe_escaneo(datos, num, servicio)
-            if es_pdf:
+                sid = self.servicio_activo
+                servicio = nucleo.cargar_servicio(sid)
+                datos = nucleo.escanear(progreso=self._progreso)
+                self._progreso("Guardando en el historial del servicio...")
+                num, _ruta = nucleo.guardar_escaneo(datos, sid, nombre)
+                self._progreso("Generando PDF en Descargas...")
+                salida, _ = nucleo.generar_informe_escaneo(datos, num, servicio)
                 self._terminar(True, f"Escaneo #{num:03d} completado. PDF guardado en Descargas: {os.path.basename(salida)}")
-            else:
-                self._terminar(True, f"Escaneo #{num:03d} completado. Informe HTML en Descargas: {os.path.basename(salida)} (no se pudo generar el PDF)")
+            except Exception as e:
+                self._terminar(False, f"Error durante el escaneo: {e}")
+
+    def _iniciar_limpieza(self):
+        if self.ocupado:
+            return
+        if not nucleo.es_admin():
+            seguir = messagebox.askyesno(
+                "Sin permisos de administrador",
+                "La limpieza de temporales del sistema requiere administrador.\n"
+                "Sin elevacion solo se limpiara la carpeta temporal del usuario.\n\nQuieres continuar de todos modos?",
+            )
+            if not seguir:
+                return
+        self._set_ocupado(True)
+        self._estado("Limpiando archivos temporales...", GRIS)
+        threading.Thread(target=self._hilo_limpieza, daemon=True).start()
+
+    def _hilo_limpieza(self):
+        try:
+            res = nucleo.limpiar_temporales() or {}
+            mb = res.get("MB") or 0
+            arch = res.get("Archivos") or 0
+            err = res.get("Errores") or 0
+            msg = "Limpieza de temporales completada. Liberado: " + nucleo.formato_tamano_mb(mb)
+            msg += f" ({arch} elementos eliminados"
+            if err:
+                msg += f"; {err} en uso o bloqueados"
+            msg += ")."
+            self._terminar(True, msg)
         except Exception as e:
-            self._terminar(False, f"Error durante el escaneo: {e}")
-        finally:
-            if co_inicializado:
-                try:
-                    import pythoncom
-                    pythoncom.CoUninitialize()
-                except Exception:
-                    pass
+            self._terminar(False, f"Error en la limpieza: {e}")
 
     def comparar(self):
         if self.ocupado or len(self.historial) < 2:
@@ -904,32 +939,15 @@ class App(ctk.CTk):
         threading.Thread(target=self._hilo_comparar, args=(item_a, item_b), daemon=True).start()
 
     def _hilo_comparar(self, item_a, item_b):
-        co_inicializado = False
-        try:
+        with nucleo.contexto_com():
             try:
-                import pythoncom
-                pythoncom.CoInitialize()
-                co_inicializado = True
-            except Exception:
-                pass
-
-            servicio = nucleo.cargar_servicio(self.servicio_activo)
-            et_a = f"#{item_a['num']:03d}"
-            et_b = f"#{item_b['num']:03d}"
-            salida, es_pdf = nucleo.generar_informe_comparacion(item_a["datos"], item_b["datos"], et_a, et_b, servicio)
-            if es_pdf:
+                servicio = nucleo.cargar_servicio(self.servicio_activo)
+                et_a = f"#{item_a['num']:03d}"
+                et_b = f"#{item_b['num']:03d}"
+                salida, _ = nucleo.generar_informe_comparacion(item_a["datos"], item_b["datos"], et_a, et_b, servicio)
                 self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. PDF guardado en Descargas: {os.path.basename(salida)}")
-            else:
-                self._terminar(True, f"Comparacion {et_a} vs {et_b} lista. Informe HTML en Descargas: {os.path.basename(salida)} (no se pudo generar el PDF)")
-        except Exception as e:
-            self._terminar(False, f"Error al generar la comparacion: {e}")
-        finally:
-            if co_inicializado:
-                try:
-                    import pythoncom
-                    pythoncom.CoUninitialize()
-                except Exception:
-                    pass
+            except Exception as e:
+                self._terminar(False, f"Error al generar la comparacion: {e}")
 
     def _pdf_de_item(self, item):
         if self.ocupado:
@@ -939,29 +957,13 @@ class App(ctk.CTk):
         threading.Thread(target=self._hilo_pdf_item, args=(item,), daemon=True).start()
 
     def _hilo_pdf_item(self, item):
-        co_inicializado = False
-        try:
+        with nucleo.contexto_com():
             try:
-                import pythoncom
-                pythoncom.CoInitialize()
-                co_inicializado = True
-            except Exception:
-                pass
-            servicio = nucleo.cargar_servicio(self.servicio_activo)
-            salida, es_pdf = nucleo.generar_informe_escaneo(item["datos"], item["num"], servicio)
-            if es_pdf:
+                servicio = nucleo.cargar_servicio(self.servicio_activo)
+                salida, _ = nucleo.generar_informe_escaneo(item["datos"], item["num"], servicio)
                 self._terminar(True, f"PDF del escaneo #{item['num']:03d} guardado en Descargas: {os.path.basename(salida)}")
-            else:
-                self._terminar(True, f"No se pudo generar el PDF del #{item['num']:03d}. Informe HTML guardado en Descargas: {os.path.basename(salida)}")
-        except Exception as e:
-            self._terminar(False, f"Error al generar el PDF: {e}")
-        finally:
-            if co_inicializado:
-                try:
-                    import pythoncom
-                    pythoncom.CoUninitialize()
-                except Exception:
-                    pass
+            except Exception as e:
+                self._terminar(False, f"Error al generar el PDF: {e}")
 
     def _terminar(self, ok, mensaje, abrir=None):
         def ap():
@@ -975,8 +977,9 @@ class App(ctk.CTk):
             self._refrescar_historial()
             self._set_ocupado(False)
             texto = mensaje
-            if ok and len(self.historial) >= 2 and self.sel_a and self.sel_b:
-                texto += f" Comparacion habilitada: {self.sel_a} vs {self.sel_b}."
+            if ok and len(self.historial) >= 2 and (self.sel_a is not None) and (self.sel_b is not None):
+                if self.sel_a != self.sel_b:
+                    texto += f" Comparacion habilitada: {self.sel_a} vs {self.sel_b}."
             self._estado(texto, VERDE if ok else ROJO)
             if abrir:
                 try:
@@ -1011,7 +1014,6 @@ def main():
             messagebox.showerror("Error inesperado", detalle[-1500:])
         except Exception:
             pass
-
 
 if __name__ == "__main__":
     main()
