@@ -2,7 +2,7 @@ import os
 import threading
 import traceback
 import webbrowser
-from tkinter import filedialog, messagebox
+from tkinter import BooleanVar, filedialog, messagebox
 
 import customtkinter as ctk
 
@@ -453,6 +453,19 @@ class App(ctk.CTk):
             hover_color=CARD,
             font=("Segoe UI", 12),
             command=self._iniciar_limpieza,
+        ).pack(fill="x", pady=(8, 0))
+        ctk.CTkButton(
+            sec_acc,
+            text="Revision fisica",
+            height=34,
+            corner_radius=10,
+            fg_color="transparent",
+            border_width=1,
+            border_color=BORDE,
+            text_color=TEXTO,
+            hover_color=CARD,
+            font=("Segoe UI", 12),
+            command=self._abrir_revision_fisica,
         ).pack(fill="x", pady=(8, 0))
 
         lic = nucleo.tecnico_licenciado()
@@ -920,6 +933,54 @@ class App(ctk.CTk):
             self._terminar(True, msg)
         except Exception as e:
             self._terminar(False, f"Error en la limpieza: {e}")
+
+    def _abrir_revision_fisica(self):
+        if self.ocupado:
+            return
+        if not self.servicio_activo:
+            messagebox.showinfo("Sin servicio", "Primero crea un servicio para asociar la revision.")
+            self._dialogo_nuevo_servicio()
+            return
+        sid = self.servicio_activo
+        prev = nucleo.cargar_checklist(sid) or {}
+        prev_items = {item.get("Titulo"): bool(item.get("Ok")) for item in prev.get("Items", [])}
+
+        dialogo = ctk.CTkToplevel(self)
+        dialogo.title("Revision fisica del equipo")
+        dialogo.geometry("560x680")
+        dialogo.transient(self)
+        dialogo.grab_set()
+        ctk.CTkLabel(dialogo, text="Lista de revision fisica", font=("Segoe UI", 15, "bold"), text_color=TEXTO).pack(pady=(14, 2))
+        ctk.CTkLabel(dialogo, text=sid, font=("Segoe UI", 11), text_color=TEXTO3).pack()
+
+        panel = ctk.CTkScrollableFrame(dialogo, width=520, height=330, fg_color=CARD, corner_radius=10)
+        panel.pack(padx=20, pady=(10, 6), fill="both", expand=True)
+        vars_chk = {}
+        for titulo in nucleo.CHECKLIST_FISICA:
+            var = BooleanVar(value=prev_items.get(titulo, False))
+            vars_chk[titulo] = var
+            ctk.CTkCheckBox(panel, text=titulo, variable=var, font=("Segoe UI", 13)).pack(anchor="w", padx=12, pady=4)
+
+        ctk.CTkLabel(dialogo, text="Observaciones del tecnico", font=("Segoe UI", 12, "bold"), text_color=TEXTO).pack(anchor="w", padx=20, pady=(10, 2))
+        obs_txt = ctk.CTkTextbox(dialogo, height=90, font=("Segoe UI", 12))
+        obs_txt.pack(fill="x", padx=20, pady=(0, 10))
+        if prev.get("Observaciones"):
+            obs_txt.insert("1.0", prev["Observaciones"])
+
+        def _guardar():
+            try:
+                items = [(t, bool(v.get())) for t, v in vars_chk.items()]
+                nucleo.guardar_checklist(sid, items, obs_txt.get("1.0", "end").strip())
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+                return
+            dialogo.destroy()
+            self._estado("Revision fisica guardada y vinculada al servicio.", VERDE)
+
+        ctk.CTkButton(
+            dialogo, text="Guardar revision", height=36, fg_color=ACENTO, hover_color="#1d4ed8",
+            text_color="#ffffff", font=("Segoe UI", 13, "bold"), command=_guardar,
+        ).pack(fill="x", padx=20, pady=(0, 16))
 
     def comparar(self):
         if self.ocupado or len(self.historial) < 2:

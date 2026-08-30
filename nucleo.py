@@ -43,7 +43,7 @@ def contexto_com():
                 pass
 
 
-VERSION = "3.19"
+VERSION = "3.20"
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35
@@ -284,6 +284,45 @@ def eliminar_escaneo(sid, num):
         return True
     except (OSError, IOError, ValueError):
         return False
+
+
+CHECKLIST_FISICA = [
+    "Pantalla (pixeles, brillo y biseles)",
+    "Teclado (todas las teclas funcionan)",
+    "Touchpad y mouse",
+    "Puertos USB (deteccion de dispositivos)",
+    "Jack de audio y parlantes",
+    "Webcam y microfono",
+    "Bateria (asiento y conectores)",
+    "Bisagras y carcasas",
+    "Ventiladores (ruido y flujo de aire)",
+    "Carga: cargador, cable y conector",
+]
+
+
+def _ruta_checklist(sid):
+    return os.path.join(dir_raiz_servicios(), sid or "", "checklist.json")
+
+
+def guardar_checklist(sid, items, observaciones=""):
+    if not sid or not re.match(r"^SRV-\d{8}-\d{3}$", sid or ""):
+        raise ValueError("Servicio invalido.")
+    datos = {
+        "Fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "Items": [{"Titulo": t, "Ok": bool(b)} for t, b in items],
+        "Observaciones": (observaciones or "").strip(),
+    }
+    _guardar_json_atomico(_ruta_checklist(sid), datos)
+    return datos
+
+
+def cargar_checklist(sid):
+    try:
+        with open(_ruta_checklist(sid), "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else None
+    except (IOError, json.JSONDecodeError, FileNotFoundError):
+        return None
 
 
 def nombre_escaneo(datos, num=None):
@@ -1772,6 +1811,29 @@ def generar_html_escaneo(datos, num, servicio=None, para_pdf=False):
     else:
         seccion_limpieza = ""
 
+    checklist = datos.get("Checklist")
+    if not checklist:
+        sid_chk = datos.get("Servicio") or (servicio or {}).get("Id")
+        checklist = cargar_checklist(sid_chk)
+    seccion_checklist = ""
+    if checklist and checklist.get("Items"):
+        filas_check = "".join(
+            f"<tr><td>{esc(item.get('Titulo', ''))}</td>"
+            f"<td style='width:20%'>{pill('pill-ok' if item.get('Ok') else 'pill-mal', 'SI' if item.get('Ok') else 'NO')}</td></tr>"
+            for item in checklist["Items"]
+        )
+        total_items = len(checklist["Items"])
+        total_ok = sum(1 for item in checklist["Items"] if item.get("Ok"))
+        resumen_check = f"Revisada el {esc(checklist.get('Fecha', ''))} &mdash; {total_ok} de {total_items} comprobaciones cumplidas." if checklist.get("Fecha") else f"{total_ok} de {total_items} comprobaciones cumplidas."
+        seccion_checklist = (
+            f"<div class='seccion'><h2>Revision fisica del equipo</h2>"
+            f"<p class='sin-cambios'>{resumen_check}</p>"
+            "<table><thead><tr><th>Comprobacion</th><th style='width:20%'>Estado</th></tr></thead>"
+            f"<tbody>{filas_check}</tbody></table>"
+            + (f"<p class='aviso'><b>Observaciones del tecnico:</b> {esc(checklist.get('Observaciones', ''))}</p>" if checklist.get("Observaciones") else "")
+            + "</div>"
+        )
+
     recs = recomendaciones_comerciales(datos)
     if recs:
         items_rec = "".join(f"<li>{dot_severidad(sev)}{esc(texto)}</li>" for sev, texto in recs)
@@ -1801,6 +1863,7 @@ def generar_html_escaneo(datos, num, servicio=None, para_pdf=False):
            "<table><thead><tr><th>Unidad</th><th>Sistema de archivos</th><th>Total</th><th>Libre</th></tr></thead>"
            f"<tbody>{filas_part}</tbody></table></div>")
         + f"<div class='seccion'><h2>Programas al inicio ({len(datos['Inicio'])})</h2>{tabla_inicio}</div>"
+        + seccion_checklist
         + seccion_limpieza
         + seccion_seg
         + seccion_nav
