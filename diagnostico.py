@@ -178,7 +178,9 @@ class DialogoModoTecnico(ctk.CTkToplevel):
             side="left", expand=True, fill="x", padx=(6, 0)
         )
         ctk.CTkButton(self.cuerpo, text="Renovar suscripcion (pagar)", height=28, fg_color="transparent",
-                       text_color=ACENTO, border_width=1, border_color=BORDE, command=self._pagar).pack(fill="x", pady=(0, 6))
+                       text_color=ACENTO, border_width=1, border_color=BORDE, command=self._pagar).pack(fill="x", pady=(0, 4))
+        ctk.CTkButton(self.cuerpo, text="Renovar por QR (escanear con celular)", height=28, fg_color="transparent",
+                       text_color=VERDE, border_width=1, border_color=BORDE, command=self._pagar_qr).pack(fill="x", pady=(0, 6))
 
     def _vista_login(self):
         ctk.CTkLabel(self.cuerpo, text="Ingresa con tu cuenta de tecnico", font=("Segoe UI", 14, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
@@ -246,6 +248,9 @@ class DialogoModoTecnico(ctk.CTkToplevel):
         ctk.CTkButton(self.cuerpo, text="Pagar con tarjeta (Mercado Pago)", height=34,
                       fg_color="transparent", border_width=1, border_color=ACENTO,
                       text_color=ACENTO, command=self._pagar).pack(fill="x", pady=(0, 4))
+        ctk.CTkButton(self.cuerpo, text="Pagar por QR (escanear con celular)", height=34,
+                      fg_color="transparent", border_width=1, border_color=VERDE,
+                      text_color=VERDE, command=self._pagar_qr).pack(fill="x", pady=(0, 4))
         botones_fin = ctk.CTkFrame(self.cuerpo, fg_color="transparent")
         botones_fin.pack(fill="x", pady=(0, 4))
         ctk.CTkButton(botones_fin, text="Ya pague, verificar", height=30,
@@ -348,6 +353,43 @@ class DialogoModoTecnico(ctk.CTkToplevel):
             text="Se abrio la pagina de Mercado Pago para pagar. Cuando termines, presiona 'Ya pague, verificar'.",
             text_color=VERDE,
         )
+
+    def _pagar_qr(self):
+        self.lbl_error.configure(text="Generando QR de pago...", text_color=TEXTO2)
+        self.update_idletasks()
+        try:
+            qr_data = nucleo.url_pago_qr()
+        except Exception as e:
+            self.lbl_error.configure(text=str(e), text_color=ROJO)
+            return
+        import qrcode
+        from PIL import ImageTk
+        img = qrcode.make(qr_data, box_size=6, border=2)
+        tk_img = ImageTk.PhotoImage(img)
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Pagar por QR")
+        dlg.configure(fg_color=FONDO)
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.update_idletasks()
+        mx = self.winfo_rootx()
+        my = self.winfo_rooty()
+        mw = self.winfo_width()
+        mh = self.winfo_height()
+        w, h = 380, 440
+        dlg.geometry(f"{w}x{h}+{max(10, mx + (mw - w) // 2)}+{max(10, my + (mh - h) // 2)}")
+        ctk.CTkLabel(dlg, text="Escanea este QR con tu app de Mercado Pago", font=("Segoe UI", 15, "bold"), text_color=TEXTO).pack(pady=(18, 4))
+        ctk.CTkLabel(dlg, text="Abri Mercado Pago en tu celular, tocá\n'Pagar' y escaneá el codigo.", font=("Segoe UI", 12), text_color=GRIS, justify="center").pack()
+        lbl_img = ctk.CTkLabel(dlg, image=tk_img, text="")
+        lbl_img._tk_img = tk_img
+        lbl_img.pack(pady=10)
+        ctk.CTkLabel(dlg, text="Monto: $" + str(nucleo.leer_config().get("cuenta_vence", "")) or "$25.000",
+                      font=("Segoe UI", 13, "bold"), text_color=ACENTO).pack()
+        ctk.CTkLabel(dlg, text="Valido 30 minutos", font=("Segoe UI", 11), text_color=TEXTO3).pack(pady=(2, 8))
+        ctk.CTkButton(dlg, text="Cerrar", height=34, fg_color="transparent", border_width=1, border_color=BORDE,
+                      text_color=TEXTO, command=dlg.destroy).pack(pady=(0, 14))
+        self.lbl_error.configure(text="QR generado. El cliente escanea y paga con su app de Mercado Pago.", text_color=VERDE)
 
     def _verificar_pago(self):
         self.lbl_error.configure(text="Verificando el pago...", text_color=TEXTO2)

@@ -45,7 +45,7 @@ def contexto_com():
                 pass
 
 
-VERSION = "3.22"
+VERSION = "3.23"
 TECNICO_SECRETO = "OptiChek-lic-2026#T3c"
 UMBRAL_BATERIA_ATENCION = 60
 UMBRAL_BATERIA_PROBLEMA = 35
@@ -450,6 +450,16 @@ def url_pago():
     if not url:
         raise ValueError("No se pudo preparar el pago (¿pago no configurado?).")
     return url
+
+
+def url_pago_qr():
+    """Crea una orden QR dinamica en Mercado Pago y devuelve el qr_data para generar el QR."""
+    acceso = _sb_access_valido()
+    resp = _sb_json("POST", "/functions/v1/checkout/qr", acceso, cuerpo={}, timeout=35)
+    qr_data = resp.get("qr_data")
+    if not qr_data:
+        raise ValueError("No se pudo generar el QR de pago.")
+    return qr_data
 
 
 def estado_pago():

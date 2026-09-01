@@ -5,3 +5,4 @@ dist/
 servicios/
 /config.json
 *.log
+supabase/.temp/
